@@ -132,7 +132,7 @@ public class HomeActivity extends BaseActivity {
     private final Runnable refreshTopLayoutRunnable = new Runnable() {
         @Override
         public void run() {
-            if (topLayout == null || isActivityUnavailable() || currentSelected != 0 || topHide != 0) {
+            if (topLayout == null || isActivityUnavailable() || currentSelected != 0) {
                 return;
             }
             hideSysBar();
@@ -410,7 +410,7 @@ public class HomeActivity extends BaseActivity {
                 initViewPager(absXml);
                 updateHomeRec(absXml);
                 tvName.clearAnimation();
-                tvName.setText("🥇 " + home.getName());
+                tvName.setText(home.getName());
                 homeSortLoading = false;
                 loadingSourceKey = null;
                 previousHomeName = null;
@@ -581,7 +581,7 @@ public class HomeActivity extends BaseActivity {
         SourceBean home = ApiConfig.get().getHomeSourceBean();
         homeSortLoading = keepCurrentContent;
         if (home != null) {
-            tvName.setText("🥇 " + home.getName());
+            tvName.setText(home.getName());
         }
         tvNameAnimation();
         if (home == null) {
@@ -785,7 +785,8 @@ public class HomeActivity extends BaseActivity {
                 if (sortFocused != currentSelected) {
                     currentSelected = sortFocused;
                     mViewPager.setCurrentItem(sortFocused, false);
-                    changeTop(sortFocused != 0);
+                    // 修复BUG：顶部导航栏和分类标签栏常驻，切换分类时绝不隐藏
+                    // 原代码 changeTop(sortFocused != 0) 会导致切到非主页分类时顶部栏消失
                     if (baseLazyFragment instanceof GridFragment && ((GridFragment) baseLazyFragment).shouldReloadOnSelect()) {
                         ((GridFragment) baseLazyFragment).forceRefresh();
                     }
@@ -800,8 +801,6 @@ public class HomeActivity extends BaseActivity {
     private static final long LONG_PRESS_THRESHOLD = 2000;
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (topHide < 0)
-            return false;
         int keyCode = event.getKeyCode();
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -821,56 +820,8 @@ public class HomeActivity extends BaseActivity {
     byte topHide = 0;
 
     private void changeTop(boolean hide) {
-        int topHeight = topLayout.getHeight();
-        if (topHeight <= 0) {
-            topHeight = AutoSizeUtils.mm2px(this.mContext, 110.0f);
-        }
-        ViewObj viewObj = new ViewObj(topLayout, (ViewGroup.MarginLayoutParams) topLayout.getLayoutParams());
-        AnimatorSet animatorSet = new AnimatorSet();
-        animatorSet.addListener(new Animator.AnimatorListener() {
-            @Override
-            public void onAnimationStart(Animator animation) {
-
-            }
-
-            @Override
-            public void onAnimationEnd(Animator animation) {
-                topHide = (byte) (hide ? 1 : 0);
-            }
-
-            @Override
-            public void onAnimationCancel(Animator animation) {
-
-            }
-
-            @Override
-            public void onAnimationRepeat(Animator animation) {
-
-            }
-        });
-        if (hide && topHide == 0) {
-            animatorSet.playTogether(ObjectAnimator.ofObject(viewObj, "marginTop", new IntEvaluator(),
-                            AutoSizeUtils.mm2px(this.mContext, 10.0f),
-                            AutoSizeUtils.mm2px(this.mContext, 0.0f)),
-                    ObjectAnimator.ofObject(viewObj, "height", new IntEvaluator(),
-                            topHeight,
-                            AutoSizeUtils.mm2px(this.mContext, 1.0f)),
-                    ObjectAnimator.ofFloat(this.topLayout, "alpha", 1.0f, 0.0f));
-            animatorSet.setDuration(200);
-            animatorSet.start();
-            return;
-        }
-        if (!hide && topHide == 1) {
-            animatorSet.playTogether(ObjectAnimator.ofObject(viewObj, "marginTop", new IntEvaluator(),
-                            AutoSizeUtils.mm2px(this.mContext, 0.0f),
-                            AutoSizeUtils.mm2px(this.mContext, 10.0f)),
-                    ObjectAnimator.ofObject(viewObj, "height", new IntEvaluator(),
-                            AutoSizeUtils.mm2px(this.mContext, 1.0f),
-                            topHeight),
-                    ObjectAnimator.ofFloat(this.topLayout, "alpha", 0.0f, 1.0f));
-            animatorSet.setDuration(200);
-            animatorSet.start();
-        }
+        // 顶部导航栏常驻，不做任何隐藏动画
+        topHide = 0;
     }
 
     @Override
@@ -917,7 +868,7 @@ public class HomeActivity extends BaseActivity {
                 previousHomeSource = ApiConfig.get().getHomeSourceBean();
                 previousHomeName = tvName.getText().toString();
                 ApiConfig.get().setSourceBean(value);
-                tvName.setText("🥇 " + value.getName());
+                tvName.setText(value.getName());
                 refreshHome(false);
             }
             @Override
