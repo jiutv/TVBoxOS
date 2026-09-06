@@ -18,10 +18,10 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <!-- 大封面海报 -->
+        <!-- 大封面海报（横向展示） -->
         <ImageView
             android:id="@+id/ivPreviewPoster"
-            android:layout_width="@dimen/vs_180"
+            android:layout_width="@dimen/vs_440"
             android:layout_height="match_parent"
             android:scaleType="centerCrop"
             android:src="@drawable/tvbox_bg" />
