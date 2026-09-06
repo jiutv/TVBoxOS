@@ -11,7 +11,10 @@ import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
 import android.widget.ImageView;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+
+import com.bumptech.glide.load.engine.bitmap_recycle.BitmapPool;
 
 import com.bumptech.glide.Glide;
 import com.bumptech.glide.load.DataSource;
@@ -20,12 +23,14 @@ import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.load.engine.GlideException;
 import com.bumptech.glide.load.model.GlideUrl;
 import com.bumptech.glide.load.model.LazyHeaders;
+import com.bumptech.glide.load.resource.bitmap.BitmapTransformation;
 import com.bumptech.glide.load.resource.bitmap.CenterCrop;
 import com.bumptech.glide.load.resource.bitmap.FitCenter;
 import com.bumptech.glide.load.resource.bitmap.RoundedCorners;
 import com.bumptech.glide.request.RequestListener;
 import com.bumptech.glide.request.RequestOptions;
 import com.bumptech.glide.request.target.Target;
+import com.bumptech.glide.util.Util;
 import com.github.tvbox.osc.api.ApiConfig;
 import com.github.tvbox.osc.base.App;
 import com.google.gson.Gson;
@@ -174,6 +179,27 @@ public class ImgUtil {
                 .skipMemoryCache(true)
                 .apply(requestOptions)
                 .into(imageView);
+    }
+
+    /**
+     * 加载图片并应用轻微虚化（高斯模糊）效果，用于大背景海报。
+     */
+    public static void loadBlur(String url, ImageView view, int radius) {
+        if (isInvalidImageUrl(url)) {
+            view.setImageDrawable(createTextDrawable("TVBox"));
+            return;
+        }
+        if (radius <= 0) radius = 12;
+        RequestOptions options = new RequestOptions()
+                .format(DecodeFormat.PREFER_RGB_565)
+                .diskCacheStrategy(DiskCacheStrategy.AUTOMATIC)
+                .dontAnimate()
+                .transform(new CenterCrop(), new BlurTransformation(radius));
+        Glide.with(App.getInstance())
+                .asBitmap()
+                .load(getUrl(url))
+                .apply(options)
+                .into(view);
     }
 
     public static int getRandomColor() {
@@ -332,5 +358,241 @@ public class ImgUtil {
                 return false;
             }
         };
+    }
+
+    /**
+     * 基于 Stack Blur 算法的 Glide BitmapTransformation，用于背景海报虚化。
+     */
+    public static class BlurTransformation extends BitmapTransformation {
+        private static final String ID = "com.github.tvbox.osc.util.ImgUtil$BlurTransformation";
+        private final int radius;
+
+        public BlurTransformation(int radius) {
+            this.radius = radius;
+        }
+
+        @Override
+        protected Bitmap transform(@NonNull BitmapPool pool, @NonNull Bitmap toTransform, int outWidth, int outHeight) {
+            Bitmap bitmap = toTransform;
+            if (bitmap.getConfig() == null) {
+                bitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true);
+            }
+            return stackBlur(bitmap, radius);
+        }
+
+        @Override
+        public void updateDiskCacheKey(@NonNull java.security.MessageDigest messageDigest) {
+            messageDigest.update((ID + radius).getBytes(CHARSET));
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (o instanceof BlurTransformation) {
+                BlurTransformation other = (BlurTransformation) o;
+                return other.radius == radius;
+            }
+            return false;
+        }
+
+        @Override
+        public int hashCode() {
+            return Util.hashCode(ID.hashCode(), Util.hashCode(radius));
+        }
+    }
+
+    /**
+     * Stack Blur 算法实现（近似高斯模糊），不依赖 RenderScript。
+     */
+    private static Bitmap stackBlur(Bitmap sentBitmap, int radius) {
+        if (radius < 1) return sentBitmap;
+        Bitmap bitmap = sentBitmap.copy(sentBitmap.getConfig() == null ? Bitmap.Config.ARGB_8888 : sentBitmap.getConfig(), true);
+        int w = bitmap.getWidth();
+        int h = bitmap.getHeight();
+        int[] pix = new int[w * h];
+        bitmap.getPixels(pix, 0, w, 0, 0, w, h);
+
+        int wm = w - 1;
+        int hm = h - 1;
+        int wh = w * h;
+        int div = radius + radius + 1;
+
+        int[] r = new int[wh];
+        int[] g = new int[wh];
+        int[] b = new int[wh];
+        int rsum, gsum, bsum, x, y, i, p, yp, yi, yw;
+        int[] vmin = new int[Math.max(w, h)];
+
+        int divsum = (div + 1) >> 1;
+        divsum *= divsum;
+        int temp = 256 * divsum;
+        int[] dv = new int[temp];
+        for (i = 0; i < temp; i++) {
+            dv[i] = (i / divsum);
+        }
+
+        yw = yi = 0;
+        int[][] stack = new int[div][3];
+        int stackpointer;
+        int stackstart;
+        int[] sir;
+        int rbs;
+        int r1 = radius + 1;
+        int routsum, goutsum, boutsum;
+        int rinsum, ginsum, binsum;
+
+        for (y = 0; y < h; y++) {
+            rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
+            for (i = -radius; i <= radius; i++) {
+                p = pix[yi + Math.min(wm, Math.max(i, 0))];
+                sir = stack[i + radius];
+                sir[0] = (p & 0xff0000) >> 16;
+                sir[1] = (p & 0x00ff00) >> 8;
+                sir[2] = (p & 0x0000ff);
+                rbs = r1 - Math.abs(i);
+                rsum += sir[0] * rbs;
+                gsum += sir[1] * rbs;
+                bsum += sir[2] * rbs;
+                if (i > 0) {
+                    rinsum += sir[0];
+                    ginsum += sir[1];
+                    binsum += sir[2];
+                } else {
+                    routsum += sir[0];
+                    goutsum += sir[1];
+                    boutsum += sir[2];
+                }
+            }
+            stackpointer = radius;
+
+            for (x = 0; x < w; x++) {
+                r[yi] = dv[rsum];
+                g[yi] = dv[gsum];
+                b[yi] = dv[bsum];
+
+                rsum -= routsum;
+                gsum -= goutsum;
+                bsum -= boutsum;
+
+                stackstart = stackpointer - radius + div;
+                sir = stack[stackstart % div];
+
+                routsum -= sir[0];
+                goutsum -= sir[1];
+                boutsum -= sir[2];
+
+                if (y == 0) {
+                    vmin[x] = Math.min(x + radius + 1, wm);
+                }
+                p = pix[yw + vmin[x]];
+
+                sir[0] = (p & 0xff0000) >> 16;
+                sir[1] = (p & 0x00ff00) >> 8;
+                sir[2] = (p & 0x0000ff);
+
+                rinsum += sir[0];
+                ginsum += sir[1];
+                binsum += sir[2];
+
+                rsum += rinsum;
+                gsum += ginsum;
+                bsum += binsum;
+
+                stackpointer = (stackpointer + 1) % div;
+                sir = stack[(stackpointer) % div];
+
+                routsum += sir[0];
+                goutsum += sir[1];
+                boutsum += sir[2];
+
+                rinsum -= sir[0];
+                ginsum -= sir[1];
+                binsum -= sir[2];
+
+                yi++;
+            }
+            yw += w;
+        }
+        for (x = 0; x < w; x++) {
+            rinsum = ginsum = binsum = routsum = goutsum = boutsum = rsum = gsum = bsum = 0;
+            yp = -radius * w;
+            for (i = -radius; i <= radius; i++) {
+                yi = Math.max(0, yp) + x;
+
+                sir = stack[i + radius];
+
+                sir[0] = r[yi];
+                sir[1] = g[yi];
+                sir[2] = b[yi];
+
+                rbs = r1 - Math.abs(i);
+
+                rsum += r[yi] * rbs;
+                gsum += g[yi] * rbs;
+                bsum += b[yi] * rbs;
+
+                if (i > 0) {
+                    rinsum += sir[0];
+                    ginsum += sir[1];
+                    binsum += sir[2];
+                } else {
+                    routsum += sir[0];
+                    goutsum += sir[1];
+                    boutsum += sir[2];
+                }
+
+                if (i < hm) {
+                    yp += w;
+                }
+            }
+            yi = x;
+            stackpointer = radius;
+            for (y = 0; y < h; y++) {
+                pix[yi] = (0xff000000 & pix[yi]) | (dv[rsum] << 16) | (dv[gsum] << 8) | dv[bsum];
+
+                rsum -= routsum;
+                gsum -= goutsum;
+                bsum -= boutsum;
+
+                stackstart = stackpointer - radius + div;
+                sir = stack[stackstart % div];
+
+                routsum -= sir[0];
+                goutsum -= sir[1];
+                boutsum -= sir[2];
+
+                if (x == 0) {
+                    vmin[y] = Math.min(y + r1, hm) * w;
+                }
+                p = x + vmin[y];
+
+                sir[0] = r[p];
+                sir[1] = g[p];
+                sir[2] = b[p];
+
+                rinsum += sir[0];
+                ginsum += sir[1];
+                binsum += sir[2];
+
+                rsum += rinsum;
+                gsum += ginsum;
+                bsum += binsum;
+
+                stackpointer = (stackpointer + 1) % div;
+                sir = stack[stackpointer];
+
+                routsum += sir[0];
+                goutsum += sir[1];
+                boutsum += sir[2];
+
+                rinsum -= sir[0];
+                ginsum -= sir[1];
+                binsum -= sir[2];
+
+                yi += w;
+            }
+        }
+
+        bitmap.setPixels(pix, 0, w, 0, 0, w, h);
+        return bitmap;
     }
 }

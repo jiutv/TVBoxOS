@@ -46,7 +46,6 @@ import com.lzy.okgo.callback.AbsCallback;
 import com.lzy.okgo.model.Response;
 import com.orhanobut.hawk.Hawk;
 import com.owen.tvrecyclerview.widget.TvRecyclerView;
-import com.owen.tvrecyclerview.widget.V7GridLayoutManager;
 import com.owen.tvrecyclerview.widget.V7LinearLayoutManager;
 
 import org.greenrobot.eventbus.EventBus;
@@ -66,6 +65,7 @@ public class UserFragment extends BaseLazyFragment {
     private ImageView ivPreviewPoster;
     private TextView tvPreviewName;
     private TextView tvPreviewTypeYear;
+    private TextView tvPreviewActor;
     private TextView tvPreviewDes;
 
     public static UserFragment newInstance() {
@@ -84,26 +84,15 @@ public class UserFragment extends BaseLazyFragment {
     @Override
     protected void onFragmentResume() {
         super.onFragmentResume();
-        if (Hawk.get(HawkConfig.HOME_REC_STYLE, false)) {
-            tvHotList.setVisibility(View.VISIBLE);
-            tvHotList.setHasFixedSize(true);
-            int spanCount = 5;
-            if(style!=null && Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 1)spanCount=ImgUtil.spanCountByStyle(style,spanCount);
-            tvHotList.setLayoutManager(new V7GridLayoutManager(this.mContext, spanCount));
-            int paddingLeft = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
-            int paddingTop = getResources().getDimensionPixelSize(R.dimen.vs_20);
-            int paddingRight = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
-            int paddingBottom = getResources().getDimensionPixelSize(R.dimen.vs_20);
-            tvHotList.setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom);
-        } else {
-            tvHotList.setVisibility(View.VISIBLE);
-            tvHotList.setLayoutManager(new V7LinearLayoutManager(this.mContext, V7LinearLayoutManager.HORIZONTAL, false));
-            int paddingLeft = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
-            int paddingTop = getResources().getDimensionPixelSize(R.dimen.vs_20);
-            int paddingRight = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
-            int paddingBottom = getResources().getDimensionPixelSize(R.dimen.vs_20);
-            tvHotList.setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom);
-        }
+        tvHotList.setVisibility(View.VISIBLE);
+        tvHotList.setHasFixedSize(true);
+        // 卡片始终横向排列在页面底部
+        tvHotList.setLayoutManager(new V7LinearLayoutManager(this.mContext, V7LinearLayoutManager.HORIZONTAL, false));
+        int paddingLeft = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
+        int paddingTop = getResources().getDimensionPixelSize(R.dimen.vs_10);
+        int paddingRight = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
+        int paddingBottom = getResources().getDimensionPixelSize(R.dimen.vs_10);
+        tvHotList.setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom);
         if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 2) {
             List<VodInfo> allVodRecord = RoomDataManger.getAllVodRecord(20);
             List<Movie.Video> vodList = new ArrayList<>();
@@ -157,6 +146,7 @@ public class UserFragment extends BaseLazyFragment {
         ivPreviewPoster = findViewById(R.id.ivPreviewPoster);
         tvPreviewName = findViewById(R.id.tvPreviewName);
         tvPreviewTypeYear = findViewById(R.id.tvPreviewTypeYear);
+        tvPreviewActor = findViewById(R.id.tvPreviewActor);
         tvPreviewDes = findViewById(R.id.tvPreviewDes);
         if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 1 && homeSourceRec!=null) {
             style=ImgUtil.initStyle();
@@ -272,7 +262,7 @@ public class UserFragment extends BaseLazyFragment {
     }
 
     /**
-     * 默认预览第一个影片信息
+     * 默认预览第一个影片信息，并将焦点落在第一个卡片上
      */
     private void showFirstPreview(HomeHotVodAdapter adapter) {
         if (adapter != null && adapter.getData() != null && adapter.getData().size() > 0) {
@@ -280,6 +270,18 @@ public class UserFragment extends BaseLazyFragment {
             if (first != null) {
                 updatePreview(first);
             }
+            // 默认选中第一个卡片
+            tvHotList.post(new Runnable() {
+                @Override
+                public void run() {
+                    View firstChild = tvHotList.getLayoutManager().findViewByPosition(0);
+                    if (firstChild != null) {
+                        firstChild.requestFocus();
+                    } else {
+                        tvHotList.requestFocus();
+                    }
+                }
+            });
         }
     }
 
@@ -288,13 +290,13 @@ public class UserFragment extends BaseLazyFragment {
      */
     private void updatePreview(Movie.Video vod) {
         if (vod == null) return;
-        // 海报
+        // 海报（大背景，带轻微虚化效果）
         String pic = vod.pic == null ? "" : vod.pic.trim();
         if (!TextUtils.isEmpty(pic)) {
             if (ImgUtil.isBase64Image(pic)) {
                 ivPreviewPoster.setImageBitmap(ImgUtil.decodeBase64ToBitmap(pic));
             } else {
-                ImgUtil.load(pic, ivPreviewPoster, 10);
+                ImgUtil.loadBlur(pic, ivPreviewPoster, 12);
             }
         }
         // 名称
@@ -312,6 +314,12 @@ public class UserFragment extends BaseLazyFragment {
             typeYear.append(vod.note);
         }
         tvPreviewTypeYear.setText(typeYear.toString());
+        // 主演
+        String actorText = "";
+        if (!TextUtils.isEmpty(vod.actor)) {
+            actorText = "主演：" + vod.actor;
+        }
+        tvPreviewActor.setText(actorText);
         // 简介
         tvPreviewDes.setText(vod.des == null ? "" : vod.des);
     }
@@ -330,6 +338,7 @@ public class UserFragment extends BaseLazyFragment {
                     ArrayList<Movie.Video> hotMovies = loadHots(json);
                     if (hotMovies != null && hotMovies.size() > 0) {
                         adapter.setNewData(hotMovies);
+                        showFirstPreview(adapter);
                         return;
                     }
                 }
