@@ -3,7 +3,8 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@drawable/tvbox_bg">
 
     <LinearLayout
         android:id="@+id/topLayout"
@@ -17,7 +18,7 @@
         app:layout_constraintRight_toRightOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
-        <!-- 第1行：标题 + 导航按钮 + 时间 -->
+        <!-- 第1行：站点名 + 导航按钮 + 时间 -->
         <LinearLayout
             android:id="@+id/topRow1"
             android:layout_width="match_parent"
