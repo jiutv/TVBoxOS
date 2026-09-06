@@ -93,10 +93,10 @@ jobs:
           sed -i '$a\RELEASE_KEY_ALIAS=TVBoxOSC'            ./gradle.properties
           sed -i '$a\RELEASE_STORE_PASSWORD=TVBoxOSC'       ./gradle.properties
           sed -i '$a\RELEASE_KEY_PASSWORD=TVBoxOSC'         ./gradle.properties
-          sed -i 's/^#\(org.gradle.jvmargs=.*\)/\1/'        ./gradle.properties
+          sed -i 's/^#$org.gradle.jvmargs=.*$/\1/'        ./gradle.properties
       - name: Setup Java 17 (for sdkmanager)
         if: ${{ env.commit }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -108,7 +108,7 @@ jobs:
           sdkmanager "platforms;android-33" "build-tools;30.0.3" "build-tools;33.0.2"
       - name: Setup Java 11 (for Gradle build)
         if: ${{ env.commit }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '11'
@@ -120,12 +120,23 @@ jobs:
         run: |
           echo "sdk.dir=${ANDROID_HOME}" > local.properties
           cat local.properties
+      - name: Build Environment Info
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: |
+          echo "Java version:"
+          java -version 2>&1
+          echo "Python version:"
+          python3 --version 2>&1 || echo "no python3"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "local.properties:"
+          cat local.properties
       - name: Build With Gradle
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --build-cache --stacktrace --warning-mode all
+          ./gradlew assembleRelease --build-cache --stacktrace --info --warning-mode all 2>&1 | tail -200
       - name: Prepare App
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -153,9 +164,9 @@ jobs:
           export LESSCHARSET=utf-8
           echo -e "Credit: [${{ matrix.userName }}](${{ env.upStream }})\nCommit: ${{ env.commit }}\nChangelog:\n\`\`\`" > apk/${{ matrix.userName }}-Release.log
           if [ "${{ env.commit }}" == "${lastCommit}" ]; then
-            git log --pretty=format:%B ${{ env.commitS }} -1 |sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' |cat -n |sort -k2,2 -k1,1n |uniq -f1 |sort -k1,1n |cut -f2- >> apk/${{ matrix.userName }}-Release.log
+            git log --pretty=format:%B ${{ env.commitS }} -1 |sed -e "s# \{2,\}#\n#g" -e "/^Merge $pull\|branch\|remote$/d" -e '/^$/d' |cat -n |sort -k2,2 -k1,1n |uniq -f1 |sort -k1,1n |cut -f2- >> apk/${{ matrix.userName }}-Release.log
           else
-            git log --pretty=format:%B ${{ env.commitS }}...${lastCommit:0:7} |sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' |cat -n |sort -k2,2 -k1,1n |uniq -f1 |sort -k1,1n |cut -f2- >> apk/${{ matrix.userName }}-Release.log
+            git log --pretty=format:%B ${{ env.commitS }}...${lastCommit:0:7} |sed -e "s# \{2,\}#\n#g" -e "/^Merge $pull\|branch\|remote$/d" -e '/^$/d' |cat -n |sort -k2,2 -k1,1n |uniq -f1 |sort -k1,1n |cut -f2- >> apk/${{ matrix.userName }}-Release.log
           fi
           echo -e '\n```' >> apk/${{ matrix.userName }}-Release.log
       - name: Upload App To Artifact
