@@ -410,6 +410,7 @@ public class HomeActivity extends BaseActivity {
                 initViewPager(absXml);
                 updateHomeRec(absXml);
                 tvName.clearAnimation();
+                tvName.setText("🥇 " + home.getName());
                 homeSortLoading = false;
                 loadingSourceKey = null;
                 previousHomeName = null;
@@ -579,6 +580,9 @@ public class HomeActivity extends BaseActivity {
     private void loadHomeSort(boolean keepCurrentContent) {
         SourceBean home = ApiConfig.get().getHomeSourceBean();
         homeSortLoading = keepCurrentContent;
+        if (home != null) {
+            tvName.setText("🥇 " + home.getName());
+        }
         tvNameAnimation();
         if (home == null) {
             loadingSourceKey = null;
@@ -911,7 +915,9 @@ public class HomeActivity extends BaseActivity {
             public void click(SourceBean value, int pos) {
                 dismissSiteSwitchDialog();
                 previousHomeSource = ApiConfig.get().getHomeSourceBean();
+                previousHomeName = tvName.getText().toString();
                 ApiConfig.get().setSourceBean(value);
+                tvName.setText("🥇 " + value.getName());
                 refreshHome(false);
             }
             @Override
