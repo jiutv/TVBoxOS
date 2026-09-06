@@ -12,7 +12,7 @@
     <LinearLayout
         android:id="@+id/previewLayout"
         android:layout_width="match_parent"
-        android:layout_height="@dimen/vs_260"
+        android:layout_height="@dimen/vs_250"
         android:layout_marginTop="@dimen/vs_10"
         android:layout_marginBottom="@dimen/vs_10"
         android:gravity="center_vertical"
@@ -44,7 +44,7 @@
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:textColor="@color/color_FFFFFF"
-                android:textSize="@dimen/ts_32"
+                android:textSize="@dimen/ts_30"
                 android:textStyle="bold"
                 tools:text="影片名称" />
 
