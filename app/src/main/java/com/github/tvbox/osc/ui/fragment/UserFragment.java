@@ -3,8 +3,11 @@ package com.github.tvbox.osc.ui.fragment;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.view.View;
 import android.view.animation.BounceInterpolator;
+import android.widget.ImageView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -60,6 +63,10 @@ public class UserFragment extends BaseLazyFragment {
     private List<Movie.Video> homeSourceRec;
     public static TvRecyclerView tvHotList;
     private SourceViewModel sourceViewModel;
+    private ImageView ivPreviewPoster;
+    private TextView tvPreviewName;
+    private TextView tvPreviewTypeYear;
+    private TextView tvPreviewDes;
 
     public static UserFragment newInstance() {
         return new UserFragment();
@@ -111,6 +118,7 @@ public class UserFragment extends BaseLazyFragment {
                 vodList.add(vod);
             }
             homeHotVodAdapter.setNewData(vodList);
+            showFirstPreview(homeHotVodAdapter);
         }
     }
 
@@ -146,6 +154,10 @@ public class UserFragment extends BaseLazyFragment {
         EventBus.getDefault().register(this);
         sourceViewModel = new ViewModelProvider(this).get(SourceViewModel.class);
         tvHotList = findViewById(R.id.tvHotList);
+        ivPreviewPoster = findViewById(R.id.ivPreviewPoster);
+        tvPreviewName = findViewById(R.id.tvPreviewName);
+        tvPreviewTypeYear = findViewById(R.id.tvPreviewTypeYear);
+        tvPreviewDes = findViewById(R.id.tvPreviewDes);
         if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 1 && homeSourceRec!=null) {
             style=ImgUtil.initStyle();
         }
@@ -222,6 +234,10 @@ public class UserFragment extends BaseLazyFragment {
             @Override
             public void onItemSelected(TvRecyclerView parent, View itemView, int position) {
                 itemView.animate().scaleX(1.05f).scaleY(1.05f).setDuration(300).setInterpolator(new BounceInterpolator()).start();
+                Movie.Video vod = homeHotVodAdapter.getItem(position);
+                if (vod != null) {
+                    updatePreview(vod);
+                }
             }
 
             @Override
@@ -245,12 +261,59 @@ public class UserFragment extends BaseLazyFragment {
         if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 1) {
             if (homeSourceRec != null) {
                 adapter.setNewData(homeSourceRec);
+                showFirstPreview(adapter);
                 return;
             }
         } else if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 2) {
+            showFirstPreview(adapter);
             return;
         }
         setDouBanData(adapter);
+    }
+
+    /**
+     * 默认预览第一个影片信息
+     */
+    private void showFirstPreview(HomeHotVodAdapter adapter) {
+        if (adapter != null && adapter.getData() != null && adapter.getData().size() > 0) {
+            Movie.Video first = adapter.getData().get(0);
+            if (first != null) {
+                updatePreview(first);
+            }
+        }
+    }
+
+    /**
+     * 更新大封面预览区
+     */
+    private void updatePreview(Movie.Video vod) {
+        if (vod == null) return;
+        // 海报
+        String pic = vod.pic == null ? "" : vod.pic.trim();
+        if (!TextUtils.isEmpty(pic)) {
+            if (ImgUtil.isBase64Image(pic)) {
+                ivPreviewPoster.setImageBitmap(ImgUtil.decodeBase64ToBitmap(pic));
+            } else {
+                ImgUtil.load(pic, ivPreviewPoster, 10);
+            }
+        }
+        // 名称
+        tvPreviewName.setText(vod.name == null ? "" : vod.name);
+        // 类型 + 年份
+        StringBuilder typeYear = new StringBuilder();
+        if (!TextUtils.isEmpty(vod.type)) {
+            typeYear.append(vod.type);
+        }
+        if (vod.year > 0) {
+            if (typeYear.length() > 0) typeYear.append(" · ");
+            typeYear.append(vod.year);
+        }
+        if (typeYear.length() == 0 && !TextUtils.isEmpty(vod.note)) {
+            typeYear.append(vod.note);
+        }
+        tvPreviewTypeYear.setText(typeYear.toString());
+        // 简介
+        tvPreviewDes.setText(vod.des == null ? "" : vod.des);
     }
 
     private void setDouBanData(HomeHotVodAdapter adapter) {
@@ -284,6 +347,7 @@ public class UserFragment extends BaseLazyFragment {
                                 @Override
                                 public void run() {
                                     adapter.setNewData(loadHots(netJson));
+                                    showFirstPreview(adapter);
                                 }
                             });
                         }
