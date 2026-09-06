@@ -3,11 +3,8 @@ package com.github.tvbox.osc.ui.fragment;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.os.Bundle;
-import android.text.TextUtils;
 import android.view.View;
 import android.view.animation.BounceInterpolator;
-import android.widget.ImageView;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -46,6 +43,7 @@ import com.lzy.okgo.callback.AbsCallback;
 import com.lzy.okgo.model.Response;
 import com.orhanobut.hawk.Hawk;
 import com.owen.tvrecyclerview.widget.TvRecyclerView;
+import com.owen.tvrecyclerview.widget.V7GridLayoutManager;
 import com.owen.tvrecyclerview.widget.V7LinearLayoutManager;
 
 import org.greenrobot.eventbus.EventBus;
@@ -62,11 +60,6 @@ public class UserFragment extends BaseLazyFragment {
     private List<Movie.Video> homeSourceRec;
     public static TvRecyclerView tvHotList;
     private SourceViewModel sourceViewModel;
-    private ImageView ivPreviewPoster;
-    private TextView tvPreviewName;
-    private TextView tvPreviewTypeYear;
-    private TextView tvPreviewActor;
-    private TextView tvPreviewDes;
 
     public static UserFragment newInstance() {
         return new UserFragment();
@@ -84,15 +77,26 @@ public class UserFragment extends BaseLazyFragment {
     @Override
     protected void onFragmentResume() {
         super.onFragmentResume();
-        tvHotList.setVisibility(View.VISIBLE);
-        tvHotList.setHasFixedSize(true);
-        // 卡片始终横向排列在页面底部
-        tvHotList.setLayoutManager(new V7LinearLayoutManager(this.mContext, V7LinearLayoutManager.HORIZONTAL, false));
-        int paddingLeft = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
-        int paddingTop = getResources().getDimensionPixelSize(R.dimen.vs_10);
-        int paddingRight = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
-        int paddingBottom = getResources().getDimensionPixelSize(R.dimen.vs_10);
-        tvHotList.setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom);
+        if (Hawk.get(HawkConfig.HOME_REC_STYLE, false)) {
+            tvHotList.setVisibility(View.VISIBLE);
+            tvHotList.setHasFixedSize(true);
+            int spanCount = 5;
+            if(style!=null && Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 1)spanCount=ImgUtil.spanCountByStyle(style,spanCount);
+            tvHotList.setLayoutManager(new V7GridLayoutManager(this.mContext, spanCount));
+            int paddingLeft = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
+            int paddingTop = getResources().getDimensionPixelSize(R.dimen.vs_20);
+            int paddingRight = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
+            int paddingBottom = getResources().getDimensionPixelSize(R.dimen.vs_20);
+            tvHotList.setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom);
+        } else {
+            tvHotList.setVisibility(View.VISIBLE);
+            tvHotList.setLayoutManager(new V7LinearLayoutManager(this.mContext, V7LinearLayoutManager.HORIZONTAL, false));
+            int paddingLeft = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
+            int paddingTop = getResources().getDimensionPixelSize(R.dimen.vs_20);
+            int paddingRight = -tvHotList.mHorizontalSpacingWithMargins / 2 + getResources().getDimensionPixelSize(R.dimen.vs_6);
+            int paddingBottom = getResources().getDimensionPixelSize(R.dimen.vs_20);
+            tvHotList.setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom);
+        }
         if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 2) {
             List<VodInfo> allVodRecord = RoomDataManger.getAllVodRecord(20);
             List<Movie.Video> vodList = new ArrayList<>();
@@ -107,7 +111,6 @@ public class UserFragment extends BaseLazyFragment {
                 vodList.add(vod);
             }
             homeHotVodAdapter.setNewData(vodList);
-            showFirstPreview(homeHotVodAdapter);
         }
     }
 
@@ -143,11 +146,6 @@ public class UserFragment extends BaseLazyFragment {
         EventBus.getDefault().register(this);
         sourceViewModel = new ViewModelProvider(this).get(SourceViewModel.class);
         tvHotList = findViewById(R.id.tvHotList);
-        ivPreviewPoster = findViewById(R.id.ivPreviewPoster);
-        tvPreviewName = findViewById(R.id.tvPreviewName);
-        tvPreviewTypeYear = findViewById(R.id.tvPreviewTypeYear);
-        tvPreviewActor = findViewById(R.id.tvPreviewActor);
-        tvPreviewDes = findViewById(R.id.tvPreviewDes);
         if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 1 && homeSourceRec!=null) {
             style=ImgUtil.initStyle();
         }
@@ -224,10 +222,6 @@ public class UserFragment extends BaseLazyFragment {
             @Override
             public void onItemSelected(TvRecyclerView parent, View itemView, int position) {
                 itemView.animate().scaleX(1.05f).scaleY(1.05f).setDuration(300).setInterpolator(new BounceInterpolator()).start();
-                Movie.Video vod = homeHotVodAdapter.getItem(position);
-                if (vod != null) {
-                    updatePreview(vod);
-                }
             }
 
             @Override
@@ -251,77 +245,12 @@ public class UserFragment extends BaseLazyFragment {
         if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 1) {
             if (homeSourceRec != null) {
                 adapter.setNewData(homeSourceRec);
-                showFirstPreview(adapter);
                 return;
             }
         } else if (Hawk.get(HawkConfig.HOME_REC, HawkConfig.DEFAULT_HOME_REC) == 2) {
-            showFirstPreview(adapter);
             return;
         }
         setDouBanData(adapter);
-    }
-
-    /**
-     * 默认预览第一个影片信息，并将焦点落在第一个卡片上
-     */
-    private void showFirstPreview(HomeHotVodAdapter adapter) {
-        if (adapter != null && adapter.getData() != null && adapter.getData().size() > 0) {
-            Movie.Video first = adapter.getData().get(0);
-            if (first != null) {
-                updatePreview(first);
-            }
-            // 默认选中第一个卡片
-            tvHotList.post(new Runnable() {
-                @Override
-                public void run() {
-                    View firstChild = tvHotList.getLayoutManager().findViewByPosition(0);
-                    if (firstChild != null) {
-                        firstChild.requestFocus();
-                    } else {
-                        tvHotList.requestFocus();
-                    }
-                }
-            });
-        }
-    }
-
-    /**
-     * 更新大封面预览区
-     */
-    private void updatePreview(Movie.Video vod) {
-        if (vod == null) return;
-        // 海报（大背景，带轻微虚化效果）
-        String pic = vod.pic == null ? "" : vod.pic.trim();
-        if (!TextUtils.isEmpty(pic)) {
-            if (ImgUtil.isBase64Image(pic)) {
-                ivPreviewPoster.setImageBitmap(ImgUtil.decodeBase64ToBitmap(pic));
-            } else {
-                ImgUtil.loadBlur(pic, ivPreviewPoster, 12);
-            }
-        }
-        // 名称
-        tvPreviewName.setText(vod.name == null ? "" : vod.name);
-        // 类型 + 年份
-        StringBuilder typeYear = new StringBuilder();
-        if (!TextUtils.isEmpty(vod.type)) {
-            typeYear.append(vod.type);
-        }
-        if (vod.year > 0) {
-            if (typeYear.length() > 0) typeYear.append(" · ");
-            typeYear.append(vod.year);
-        }
-        if (typeYear.length() == 0 && !TextUtils.isEmpty(vod.note)) {
-            typeYear.append(vod.note);
-        }
-        tvPreviewTypeYear.setText(typeYear.toString());
-        // 主演
-        String actorText = "";
-        if (!TextUtils.isEmpty(vod.actor)) {
-            actorText = "主演：" + vod.actor;
-        }
-        tvPreviewActor.setText(actorText);
-        // 简介
-        tvPreviewDes.setText(vod.des == null ? "" : vod.des);
     }
 
     private void setDouBanData(HomeHotVodAdapter adapter) {
@@ -338,7 +267,6 @@ public class UserFragment extends BaseLazyFragment {
                     ArrayList<Movie.Video> hotMovies = loadHots(json);
                     if (hotMovies != null && hotMovies.size() > 0) {
                         adapter.setNewData(hotMovies);
-                        showFirstPreview(adapter);
                         return;
                     }
                 }
@@ -356,7 +284,6 @@ public class UserFragment extends BaseLazyFragment {
                                 @Override
                                 public void run() {
                                     adapter.setNewData(loadHots(netJson));
-                                    showFirstPreview(adapter);
                                 }
                             });
                         }
