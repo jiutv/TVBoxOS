@@ -40,6 +40,8 @@
     <color name="color_scrollview_bg">#44000000</color>
     <color name="color_text_primary">#FFFFFAE0</color>
 
+    <color name="color_home_sort_selected">#CC9370DB</color>
+    <color name="color_nav_focus">#669370DB</color>
     <!-- Unified dialog palette. Change these to update dialog surfaces globally. -->
     <color name="dialog_panel_bg">#D91D202A</color>
     <color name="dialog_panel_stroke">#33FFFFFF</color>
