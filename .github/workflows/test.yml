@@ -93,7 +93,7 @@ jobs:
           sed -i '$a\RELEASE_KEY_ALIAS=TVBoxOSC'            ./gradle.properties
           sed -i '$a\RELEASE_STORE_PASSWORD=TVBoxOSC'       ./gradle.properties
           sed -i '$a\RELEASE_KEY_PASSWORD=TVBoxOSC'         ./gradle.properties
-          sed -i 's/^#$org.gradle.jvmargs=.*$/\1/'        ./gradle.properties
+          sed -i '/^#org.gradle.jvmargs/s/^#//'             ./gradle.properties
       - name: Setup Java 17 (for sdkmanager)
         if: ${{ env.commit }}
         uses: actions/setup-java@v5
