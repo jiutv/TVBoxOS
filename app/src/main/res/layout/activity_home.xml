@@ -32,7 +32,7 @@
                 android:focusable="false"
                 android:focusableInTouchMode="false"
                 android:gravity="left|center_vertical"
-                android:text="🥇 金牌 | 影视资源"
+                android:text="加载中..."
                 android:textAlignment="gravity"
                 android:textColor="@android:color/white"
                 android:textSize="@dimen/ts_30"
