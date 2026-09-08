@@ -266,16 +266,9 @@ public class HomeActivity extends BaseActivity {
 
         this.mGridView.setOnInBorderKeyEventListener(new TvRecyclerView.OnInBorderKeyEventListener() {
             public boolean onInBorderKeyEvent(int direction, View view) {
+                // FOCUS_UP：不拦截，让焦点自然上移到顶部导航按钮（站点/搜索/历史/收藏/直播/推送/设置）
                 if (direction == View.FOCUS_UP) {
-                    BaseLazyFragment baseLazyFragment = fragments.get(sortFocused);
-                    if (baseLazyFragment instanceof UserFragment) {
-                        refreshHomeSort();
-                        return true;
-                    }
-                    if (baseLazyFragment instanceof GridFragment) {
-                        ((GridFragment) baseLazyFragment).forceRefresh();
-                        return true;
-                    }
+                    return false;
                 }
                 if (direction != View.FOCUS_DOWN) {
                     return false;
