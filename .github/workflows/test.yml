@@ -136,7 +136,18 @@ jobs:
         working-directory: TVBoxOSC
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --build-cache --stacktrace --info --warning-mode all 2>&1 | tail -200
+          # 逐个 flavor 独立构建，互不影响，确保全部产出
+          mkdir -p build_logs
+          for flavor in java java32 java64 python python32 python64; do
+            echo "===== Building flavor: $flavor ====="
+            if ./gradlew "assemble${flavor^}Release" --build-cache --stacktrace --warning-mode all > "build_logs/${flavor}.log" 2>&1; then
+              echo "✅ $flavor OK"
+            else
+              echo "❌ $flavor FAILED (详见 build_logs/${flavor}.log)"
+              tail -80 "build_logs/${flavor}.log"
+            fi
+          done
+          echo "===== 全部 flavor 构建结束 ====="
       - name: Prepare App
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -176,6 +187,7 @@ jobs:
           name: ${{ matrix.userName }}-${{ matrix.repoName }}
           path: |
             TVBoxOSC/apk/*
+            TVBoxOSC/build_logs/
       - name: Whether Or Not to Publish
         if: ${{ inputs.donotpublish && env.commit }}
         run: |
