@@ -830,7 +830,7 @@ public class DetailActivity extends BaseActivity {
         }
         llPlayerFragmentContainer.setClipToOutline(enable);
         llPlayerFragmentContainerBlock.setClipToOutline(enable);
-        llPlayerFragmentContainer.setBackgroundResource(enable ? R.drawable.preview_player_round : android.R.color.black);
+        llPlayerFragmentContainer.setBackgroundResource(enable ? R.drawable.preview_player_round : android.R.color.transparent);
     }
 
 

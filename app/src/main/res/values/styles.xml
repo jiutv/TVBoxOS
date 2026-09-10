@@ -5,18 +5,19 @@
         <item name="colorPrimary">@color/color_6200EE</item>
         <item name="colorPrimaryDark">@color/color_3700B3</item>
         <item name="colorAccent">@color/color_03DAC5</item>
+        <!-- 全局背景：基类就设置，所有子主题自动继承 -->
+        <item name="android:windowBackground">@drawable/tvbox_bg</item>
+        <item name="windowBackground">@drawable/tvbox_bg</item>
     </style>
 
     <style name="AppTheme.NoActionBar" parent="AppTheme">
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
         <item name="windowActionBar">false</item>
-        <item name="android:windowFullscreen">true</item>//全屏即无通知栏
-        <item name="android:windowContentOverlay">@null</item>//是否有遮盖
+        <item name="android:windowFullscreen">true</item><!--全屏即无通知栏-->
+        <item name="android:windowContentOverlay">@null</item><!--是否有遮盖-->
         <item name="windowNoTitle">true</item>
         <item name="android:keepScreenOn">true</item>
-        <!-- 全局统一使用首页背景 drawable，所有 Activity 继承此主题自动生效 -->
-        <item name="android:windowBackground">@drawable/tvbox_bg</item>
     </style>
     <!-- 自定义dialog样式 -->
     <style name="CustomDialogStyle" parent="@android:style/Theme.Dialog">
