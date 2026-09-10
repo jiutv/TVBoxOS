@@ -7,7 +7,6 @@
         <item name="colorAccent">@color/color_03DAC5</item>
         <!-- 全局背景：基类就设置，所有子主题自动继承 -->
         <item name="android:windowBackground">@drawable/tvbox_bg</item>
-        <item name="windowBackground">@drawable/tvbox_bg</item>
     </style>
 
     <style name="AppTheme.NoActionBar" parent="AppTheme">
