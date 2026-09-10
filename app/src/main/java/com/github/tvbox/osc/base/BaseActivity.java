@@ -310,9 +310,9 @@ public abstract class BaseActivity extends AppCompatActivity implements CustomAd
             throwable.printStackTrace();
             globalWp = null;
         }
+        // 有用户自定义壁纸 → 覆盖 windowBackground
+        // 没有自定义壁纸 → 让主题里的 android:windowBackground="@drawable/tvbox_bg" 自然生效
         if (globalWp != null)
             getWindow().setBackgroundDrawable(globalWp);
-        else
-            getWindow().setBackgroundDrawableResource(R.drawable.app_bg);
     }
 }
