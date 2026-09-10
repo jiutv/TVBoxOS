@@ -126,8 +126,8 @@ public class AppManager {
     public void appExit(int code) {
         try {
             finishAllActivity();
-            android.os.Process.killProcess(android.os.Process.myPid());
-            System.exit(code);
+            // 不再 killProcess/System.exit，让 Activity 栈清空后由系统回收进程
+            // Android 12+ 强杀会被系统限制，且会漏掉 Service 清理
         } catch (Exception e) {
             activityStack.clear();
             e.printStackTrace();

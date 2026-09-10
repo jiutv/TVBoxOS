@@ -408,6 +408,8 @@ public class HomeActivity extends BaseActivity {
                 loadingSourceKey = null;
                 previousHomeName = null;
                 previousHomeSource = null;
+                // 恢复焦点记忆：等数据加载完再恢复，避免索引越界
+                restoreHomeFocus();
             }
         });
     }
@@ -705,16 +707,34 @@ public class HomeActivity extends BaseActivity {
 
     private void doExit() {
         if (System.currentTimeMillis() - mExitTime < 2000) {
-            AppManager.getInstance().finishAllActivity();
+            // 先做干净的资源释放，让系统回收进程（比 killProcess 更安全）
             unregisterEventBus();
             ControlManager.get().stopServer();
-            finish();
-            android.os.Process.killProcess(android.os.Process.myPid());
-            System.exit(0);
+            finishAffinity();
         } else {
             mExitTime = System.currentTimeMillis();
             Toast.makeText(mContext, "再按一次返回键退出应用", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void restoreHomeFocus() {
+        if (!Hawk.get(HawkConfig.HOME_FOCUS_ENABLED, true)) return;
+        if (sortAdapter == null || sortAdapter.getData().isEmpty()) return;
+        int savedIndex = Hawk.get(HawkConfig.HOME_SORT_INDEX, 0);
+        int maxIndex = sortAdapter.getData().size() - 1;
+        int targetIndex = Math.max(0, Math.min(savedIndex, maxIndex));
+        // 恢复分类标签栏选中
+        mGridView.setSelectedPosition(targetIndex);
+        mGridView.setSelection(targetIndex);
+        sortFocused = targetIndex;
+        currentSelected = targetIndex;
+        // 恢复 ViewPager 页
+        mViewPager.setCurrentItem(targetIndex, false);
+        // 让 TvRecyclerView 滚动到选中位置并请求焦点
+        mHandler.post(() -> {
+            View child = mGridView.getLayoutManager().findViewByPosition(targetIndex);
+            if (child != null) child.requestFocus();
+        });
     }
 
     @Override
@@ -734,6 +754,11 @@ public class HomeActivity extends BaseActivity {
         mHandler.removeCallbacks(refreshTopInfoTextSizeRunnable);
         mHandler.removeCallbacks(refreshTopLayoutRunnable);
         mHandler.removeCallbacks(mRunnable);
+        // 保存焦点记忆：分类索引 + 当前 ViewPager 页
+        if (Hawk.get(HawkConfig.HOME_FOCUS_ENABLED, true)) {
+            Hawk.put(HawkConfig.HOME_SORT_INDEX, sortFocused);
+            Hawk.put(HawkConfig.HOME_SORT_CARD_INDEX, currentSelected);
+        }
     }
 
     private void refreshTopInfoTextSize() {

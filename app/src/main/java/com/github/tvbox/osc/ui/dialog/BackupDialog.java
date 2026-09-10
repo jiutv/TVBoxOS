@@ -169,9 +169,12 @@ public class BackupDialog extends BaseDialog {
         if (context != null) {
             Intent i = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
             if (i != null) {
-                i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                 context.startActivity(i);
-                System.exit(0);
+                // 不再 System.exit，finishAffinity 清空当前栈后由系统回收
+                if (context instanceof android.app.Activity) {
+                    ((android.app.Activity) context).finishAffinity();
+                }
             }
         }
     }

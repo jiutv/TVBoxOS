@@ -155,6 +155,10 @@ public class PlayFragment extends BaseLazyFragment {
     private boolean reusePlayerOnSwitch;
     private boolean releasePlayerOnSwitch;
     private boolean previewMode;
+    // 长按 OK 快捷菜单
+    private static final long OK_LONG_PRESS_DELAY = 800;
+    private Runnable mOkLongPressRunnable;
+    private boolean isOkLongPressTriggered = false;
     private String playLyric;
     private String lyricCacheKey;
     private String playArtwork;
@@ -1499,8 +1503,25 @@ public class PlayFragment extends BaseLazyFragment {
     }
 
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (event !=null) {
-            if (mController.onKeyDown(keyCode,event)) {
+        if (event != null) {
+            // 拦截 OK/ENTER/PLAY_PAUSE 键做长按检测（不拦截 DOWN，让 VodController 也能响应短按）
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                if (event.getRepeatCount() == 0) {
+                    isOkLongPressTriggered = false;
+                    mOkLongPressRunnable = new Runnable() {
+                        @Override
+                        public void run() {
+                            isOkLongPressTriggered = true;
+                            showQuickMenu();
+                        }
+                    };
+                    mHandler.postDelayed(mOkLongPressRunnable, OK_LONG_PRESS_DELAY);
+                }
+                // 不 return true，让 VodController 也能收到 DOWN（暂停/播放）
+            }
+            if (mController.onKeyDown(keyCode, event)) {
                 return true;
             }
         }
@@ -1508,12 +1529,54 @@ public class PlayFragment extends BaseLazyFragment {
     }
 
     public boolean onKeyUp(int keyCode, KeyEvent event) {
-        if (event !=null) {
-            if (mController.onKeyUp(keyCode,event)) {
+        if (event != null) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                // 移除长按回调
+                if (mOkLongPressRunnable != null) {
+                    mHandler.removeCallbacks(mOkLongPressRunnable);
+                    mOkLongPressRunnable = null;
+                }
+                if (isOkLongPressTriggered) {
+                    // 长按已触发，拦截 UP 事件（避免再触发暂停/播放）
+                    isOkLongPressTriggered = false;
+                    return true;
+                }
+                // 短按：让 VodController 正常处理暂停/播放
+            }
+            if (mController.onKeyUp(keyCode, event)) {
                 return true;
             }
         }
         return false;
+    }
+
+    // ==================== 长按 OK 快捷菜单 ====================
+    private android.app.AlertDialog mQuickMenuDialog;
+
+    private void showQuickMenu() {
+        if (getContext() == null) return;
+        if (mQuickMenuDialog != null && mQuickMenuDialog.isShowing()) return;
+
+        final String[] items = {"选集", "换源", "投屏"};
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(getContext());
+        builder.setTitle("快捷菜单");
+        builder.setItems(items, (dialog, which) -> {
+            switch (which) {
+                case 0: // 选集
+                    showEpisodeDialog();
+                    break;
+                case 1: // 换源
+                    mController.showParse(false);
+                    break;
+                case 2: // 投屏
+                    showCastDialog();
+                    break;
+            }
+        });
+        builder.setOnCancelListener(dialog -> mQuickMenuDialog = null);
+        mQuickMenuDialog = builder.show();
     }
 
     @Override

@@ -66,5 +66,8 @@ public class HawkConfig {
     public static final String DANMU_SIZE_SCALE = "danmu_size_scale";
     public static final String DANMU_RANDOM_COLOR = "danmu_random_color";
     public static final String DANMU_API = "danmu_api";
+    public static final String HOME_FOCUS_ENABLED = "home_focus_enabled";
+    public static final String HOME_SORT_INDEX = "home_sort_index";
+    public static final String HOME_SORT_CARD_INDEX = "home_sort_card_index";
     public static boolean hotVodDelete;
 }

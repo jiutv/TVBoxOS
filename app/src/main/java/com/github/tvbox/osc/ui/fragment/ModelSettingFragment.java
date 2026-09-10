@@ -900,9 +900,12 @@ public class ModelSettingFragment extends BaseLazyFragment {
         if (mContext == null) return;
         Intent intent = mContext.getPackageManager().getLaunchIntentForPackage(mContext.getPackageName());
         if (intent != null) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            startActivity(intent);
-            System.exit(0);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            mContext.startActivity(intent);
+            // 不再 System.exit，finishAffinity 清空当前栈后由系统回收
+            if (mContext instanceof android.app.Activity) {
+                ((android.app.Activity) mContext).finishAffinity();
+            }
         }
     }
 
