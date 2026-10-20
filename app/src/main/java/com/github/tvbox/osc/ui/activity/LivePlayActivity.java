@@ -138,6 +138,7 @@ public class LivePlayActivity extends BaseActivity {
     private boolean isWebViewPlaying = false;
     // === WebView 抓流模式 (NewBox 风格) ===
     private boolean isCapturingVideoUrl = false;    // 是否处于抓流模式
+    private boolean mainPageHookInjected = false;    // 是否已拦截主页面注入预 hook
     private String capturedVideoUrl = null;           // 抓到的视频 URL (m3u8/mp4)
     private HashMap<String, String> capturedVideoHeaders = null; // 抓到的视频请求头 (带 Cookie)
     private String webViewEntryUrl = null;            // WebView 原始入口 URL (用于 Cookie 提取)
@@ -1960,11 +1961,25 @@ public class LivePlayActivity extends BaseActivity {
                     return null; // 不抓流，或者已经抓到了，放行
                 }
                 String url = request.getUrl().toString();
+                // === 关键！拦截主页面，在任何 <script> 之前注入 fetch/XHR hook ===
+                // 这样 CMG/hls.js 等播放器在初始化时拿到的就是被 hook 的 fetch
+                if (!mainPageHookInjected && isMainPageUrl(url)) {
+                    mainPageHookInjected = true;
+                    LOG.i("📺 拦截主页面，注入预 hook: " + url);
+                    String hookedHtml = buildHookedEntryHtml(url);
+                    try {
+                        java.io.InputStream is = new java.io.ByteArrayInputStream(
+                                hookedHtml.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        return new WebResourceResponse("text/html", "UTF-8", is);
+                    } catch (Exception e) {
+                        return null;
+                    }
+                }
                 // 跳过非 http(s)
                 if (!url.startsWith("http")) return null;
                 // 用 TVBox 自带的正则检测是否视频 URL
                 if (DefaultConfig.isVideoFormat(url)) {
-                    LOG.i("🎬 LiveWebView 抓到视频流: " + url);
+                    LOG.i("🎬 LiveWebView 抓到视频流 (shouldIntercept): " + url);
                     capturedVideoUrl = url;
                     // 提取 WebView 为此请求准备的 headers (Referer, Cookie 等)
                     HashMap<String, String> headers = new HashMap<>();
@@ -1993,7 +2008,7 @@ public class LivePlayActivity extends BaseActivity {
                             switchToCapturedVideoPlayer();
                         }
                     });
-                    // 返回空响应让 WebView 不要加载这个资源（但允许其他资源继续加载）
+                    // 返回空响应让 WebView 不要加载这个资源
                     try {
                         return new WebResourceResponse("video/*", "UTF-8", null);
                     } catch (Exception e) {
@@ -2039,6 +2054,7 @@ public class LivePlayActivity extends BaseActivity {
         String actualUrl = stripWebViewPrefix(url);
         // 重置抓流状态
         isCapturingVideoUrl = true;
+        mainPageHookInjected = false;  // 允许下次 shouldInterceptRequest 拦截主页面
         capturedVideoUrl = null;
         capturedVideoHeaders = null;
         webViewEntryUrl = actualUrl;
@@ -2049,6 +2065,41 @@ public class LivePlayActivity extends BaseActivity {
         LOG.i("LiveWebView loading (capture mode): " + actualUrl);
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(actualUrl);
+    }
+
+    /**
+     * 判断某个 URL 是否是主页面（我们拦截的目标）
+     * 只拦截一次：跟 webViewEntryUrl 同一个 host + path 前缀
+     */
+    private boolean isMainPageUrl(String url) {
+        if (webViewEntryUrl == null || url == null) return false;
+        if (!url.startsWith("http") || !webViewEntryUrl.startsWith("http")) return false;
+        try {
+            java.net.URL entry = new java.net.URL(webViewEntryUrl);
+            java.net.URL cur = new java.net.URL(url);
+            return entry.getHost().equalsIgnoreCase(cur.getHost())
+                    && cur.getPath().startsWith(entry.getPath().isEmpty() ? "/" : entry.getPath());
+        } catch (Exception e) {
+            return url.equals(webViewEntryUrl) || url.startsWith(webViewEntryUrl + "?");
+        }
+    }
+
+    /**
+     * 构建预注入 hook 的 HTML —— 在任何页面脚本之前跑 fetch/XHR hook
+     * 关键：<script> 在 <head> 最前面，用 location.replace 跳转回原页面
+     * 这样 CMG/hls.js 等播放器在初始化时 window.fetch 就已经被 hook 了
+     */
+    private String buildHookedEntryHtml(String realUrl) {
+        String hookJs = buildFetchHookJs();
+        String encoded = realUrl.replace("\\", "\\\\").replace("'", "\\'");
+        return "<!DOCTYPE html><html><head>" +
+                "<meta charset=\"utf-8\">" +
+                "<script>" + hookJs + "</script>" +
+                "<script>" +
+                "try{location.replace('" + encoded + "');}" +
+                "catch(e){setTimeout(function(){location.href='" + encoded + "'},50);}" +
+                "</script>" +
+                "</head><body></body></html>";
     }
 
     /**
