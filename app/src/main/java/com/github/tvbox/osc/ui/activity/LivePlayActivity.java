@@ -11,6 +11,7 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Build;
 import android.os.CountDownTimer;
 import android.os.Handler;
 import android.text.TextUtils;
@@ -19,6 +20,12 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -124,6 +131,9 @@ import xyz.doikki.videoplayer.player.VideoView;
 public class LivePlayActivity extends BaseActivity {
     public static Context context;
     private VideoView<xyz.doikki.videoplayer.player.AbstractPlayer> mVideoView;
+    private FrameLayout mWebViewContainer;
+    private WebView mLiveWebView;
+    private boolean isWebViewPlaying = false;
     private View switchChannelSnapshotOverlay;
     private ImageView switchChannelSnapshotImage;
     private TextView tvChannelInfo;
@@ -262,6 +272,7 @@ public class LivePlayActivity extends BaseActivity {
 
         setLoadSir(findViewById(R.id.live_root));
         mVideoView = findViewById(R.id.mVideoView);
+        mWebViewContainer = findViewById(R.id.mWebViewContainer);
         switchChannelSnapshotOverlay = findViewById(R.id.switchChannelSnapshotOverlay);
         switchChannelSnapshotImage = findViewById(R.id.switchChannelSnapshotImage);
 
@@ -1329,6 +1340,9 @@ public class LivePlayActivity extends BaseActivity {
         if (mVideoView != null) {
             mVideoView.resume();
         }
+        if (mLiveWebView != null) {
+            mLiveWebView.onResume();
+        }
     }
 
 
@@ -1338,6 +1352,9 @@ public class LivePlayActivity extends BaseActivity {
         if (mVideoView != null && !exitingLivePlay) {
             mVideoView.pause();
         }
+        if (mLiveWebView != null) {
+            mLiveWebView.onPause();
+        }
     }
 
     @Override
@@ -1345,6 +1362,7 @@ public class LivePlayActivity extends BaseActivity {
         super.onDestroy();
         Hawk.put(HawkConfig.PLAYER_IS_LIVE, false);
         hideSwitchChannelSnapshot();
+        destroyLiveWebView();
         if (mVideoView != null) {
             mVideoView.release();
             mVideoView = null;
@@ -1677,6 +1695,7 @@ public class LivePlayActivity extends BaseActivity {
     private boolean canCurrentChannelCatchup() {
         if (currentLiveChannelItem == null) return false;
         String url = currentLiveChannelItem.getUrl();
+        if (isWebViewUrl(url)) return false;
         JsonObject catchupObj = currentCatchup();
         if (hasCatchupSource(catchupObj)) {
             String regex = getCatchupValue(catchupObj, "regex");
@@ -1789,6 +1808,128 @@ public class LivePlayActivity extends BaseActivity {
         }
     }
 
+    // ============ WebView 直播支持 ============
+
+    private boolean isWebViewUrl(String url) {
+        return url != null && url.startsWith("webview://");
+    }
+
+    private boolean isVideoOverrideUrl(String url) {
+        return url != null && url.startsWith("video://");
+    }
+
+    private String stripWebViewPrefix(String url) {
+        if (url != null && url.startsWith("webview://")) {
+            return url.substring(10);
+        }
+        if (url != null && url.startsWith("video://")) {
+            return url.substring(8);
+        }
+        return url;
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void initLiveWebView() {
+        if (mLiveWebView != null) return;
+        mLiveWebView = new WebView(this);
+        WebSettings settings = mLiveWebView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(true);
+        settings.setAllowUniversalAccessFromFileURLs(true);
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setBuiltInZoomControls(true);
+        settings.setSupportZoom(false);
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        settings.setSupportMultipleWindows(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
+        mLiveWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                LOG.i("LiveWebView page finished: " + url);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                super.onReceivedError(view, request, error);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    LOG.i("LiveWebView error: " + error.getDescription());
+                }
+            }
+        });
+        mLiveWebView.setWebChromeClient(new WebChromeClient());
+        mLiveWebView.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        mWebViewContainer.addView(mLiveWebView);
+    }
+
+    private void loadWebViewUrl(String url) {
+        if (mLiveWebView == null) {
+            initLiveWebView();
+        }
+        String actualUrl = stripWebViewPrefix(url);
+        LOG.i("LiveWebView loading: " + actualUrl);
+        mLiveWebView.stopLoading();
+        mLiveWebView.loadUrl(actualUrl);
+    }
+
+    private void destroyLiveWebView() {
+        if (mLiveWebView != null) {
+            mLiveWebView.stopLoading();
+            mLiveWebView.clearHistory();
+            mLiveWebView.clearCache(true);
+            mLiveWebView.loadUrl("about:blank");
+            if (mWebViewContainer != null) {
+                mWebViewContainer.removeView(mLiveWebView);
+            }
+            mLiveWebView.removeAllViews();
+            mLiveWebView.destroy();
+            mLiveWebView = null;
+        }
+    }
+
+    private void showWebViewPlayer() {
+        isWebViewPlaying = true;
+        if (mVideoView != null && mVideoView.getCurrentPlayState() != VideoView.STATE_IDLE) {
+            mVideoView.release();
+        }
+        mWebViewContainer.setVisibility(View.VISIBLE);
+    }
+
+    private void hideWebViewPlayer() {
+        isWebViewPlaying = false;
+        mWebViewContainer.setVisibility(View.GONE);
+    }
+
+    private void playLiveUrl(String url) {
+        if (isWebViewUrl(url)) {
+            showWebViewPlayer();
+            loadWebViewUrl(url);
+        } else {
+            hideWebViewPlayer();
+            if (mLiveWebView != null) {
+                mLiveWebView.stopLoading();
+                mLiveWebView.loadUrl("about:blank");
+            }
+            String actualUrl = stripWebViewPrefix(url);
+            if (mVideoView != null) {
+                mVideoView.setUrl(actualUrl, liveChannelHeader());
+                mVideoView.start();
+            }
+        }
+    }
+
+    // ============ WebView 直播支持结束 ============
+
     private boolean playChannel(int channelGroupIndex, int liveChannelIndex, boolean changeSource) {
         if ((channelGroupIndex == currentChannelGroupIndex && liveChannelIndex == currentLiveChannelIndex && !changeSource)
                 || (changeSource && currentLiveChannelItem.getSourceNum() == 1)) {
@@ -1823,7 +1964,23 @@ public class LivePlayActivity extends BaseActivity {
         showBottomEpg();
         backcontroller.setVisibility(View.GONE);
         ll_right_top_huikan.setVisibility(View.GONE);
-        if(mVideoView!=null){
+        String liveUrl = currentLiveChannelItem.getUrl();
+        if (isWebViewUrl(liveUrl)) {
+            if (mVideoView != null && mVideoView.getCurrentPlayState() != VideoView.STATE_IDLE) {
+                mVideoView.release();
+            }
+            hideSwitchChannelSnapshot();
+            showWebViewPlayer();
+            loadWebViewUrl(liveUrl);
+            showResolutionAfterChannelSwitch();
+        } else if(mVideoView!=null){
+            if(isWebViewPlaying){
+                hideWebViewPlayer();
+                if(mLiveWebView!=null){
+                    mLiveWebView.stopLoading();
+                    mLiveWebView.loadUrl("about:blank");
+                }
+            }
             if(liveChannelHeader()!=null)LOG.i("echo-"+liveChannelHeader().toString());
             boolean reusePlayer = canReusePlayer(previousLivePlayerType);
             boolean keepExoFrame = reusePlayer && previousLivePlayerType == 2;
@@ -1832,13 +1989,13 @@ public class LivePlayActivity extends BaseActivity {
             } else {
                 hideSwitchChannelSnapshot();
             }
-            String liveUrl = currentLiveChannelItem.getUrl();
+            String actualUrl = stripWebViewPrefix(liveUrl);
             if (reusePlayer) {
-                mVideoView.setUrl(liveUrl, liveChannelHeader());
+                mVideoView.setUrl(actualUrl, liveChannelHeader());
                 mVideoView.replay(true);
             } else {
                 mVideoView.release();
-                mVideoView.setUrl(liveUrl,liveChannelHeader());
+                mVideoView.setUrl(actualUrl,liveChannelHeader());
                 mVideoView.start();
             }
             showResolutionAfterChannelSwitch();
@@ -2030,9 +2187,10 @@ public class LivePlayActivity extends BaseActivity {
                 currentLiveLookBackIndex=position;
                 epgListAdapter.setSelectedEpgIndex(position);
                 if (now.compareTo(selectedData.startdateTime) >= 0 && now.compareTo(selectedData.enddateTime) <= 0) {
+                    if (isWebViewUrl(currentLiveChannelItem.getUrl())) return;
                     mVideoView.release();
                     isSHIYI = false;
-                    mVideoView.setUrl(currentLiveChannelItem.getUrl(),liveChannelHeader());
+                    mVideoView.setUrl(stripWebViewPrefix(currentLiveChannelItem.getUrl()),liveChannelHeader());
                     mVideoView.start();
                     epgListAdapter.setShiyiSelection(-1, false,timeFormat.format(date));
                     epgListAdapter.notifyDataSetChanged();
@@ -2097,9 +2255,10 @@ public class LivePlayActivity extends BaseActivity {
                 currentLiveLookBackIndex=position;
                 epgListAdapter.setSelectedEpgIndex(position);
                 if (now.compareTo(selectedData.startdateTime) >= 0 && now.compareTo(selectedData.enddateTime) <= 0) {
+                    if (isWebViewUrl(currentLiveChannelItem.getUrl())) return;
                     mVideoView.release();
                     isSHIYI = false;
-                    mVideoView.setUrl(currentLiveChannelItem.getUrl(),liveChannelHeader());
+                    mVideoView.setUrl(stripWebViewPrefix(currentLiveChannelItem.getUrl()),liveChannelHeader());
                     mVideoView.start();
                     epgListAdapter.setShiyiSelection(-1, false,timeFormat.format(date));
                     epgListAdapter.notifyDataSetChanged();
@@ -2319,6 +2478,9 @@ public class LivePlayActivity extends BaseActivity {
 
     private boolean switchLivePlayerAndReplay() {
         if (!allowLiveSwitchPlayer || currentLiveChannelItem == null || mVideoView == null) {
+            return false;
+        }
+        if (isWebViewUrl(currentLiveChannelItem.getUrl())) {
             return false;
         }
         mHandler.removeCallbacks(mConnectTimeoutChangeSourceRun);
@@ -2637,13 +2799,17 @@ public class LivePlayActivity extends BaseActivity {
                 playChannel(currentChannelGroupIndex, currentLiveChannelIndex,true);
                 break;
             case 1://画面比例
-                livePlayerManager.changeLivePlayerScale(mVideoView, position);
+                if (!isWebViewUrl(currentLiveChannelItem.getUrl())) {
+                    livePlayerManager.changeLivePlayerScale(mVideoView, position);
+                }
                 break;
             case 2://播放解码
-                mVideoView.release();
-                livePlayerManager.changeLivePlayerType(mVideoView, position);
-                mVideoView.setUrl(currentLiveChannelItem.getUrl(),liveChannelHeader());
-                mVideoView.start();
+                if (!isWebViewUrl(currentLiveChannelItem.getUrl())) {
+                    mVideoView.release();
+                    livePlayerManager.changeLivePlayerType(mVideoView, position);
+                    mVideoView.setUrl(stripWebViewPrefix(currentLiveChannelItem.getUrl()), liveChannelHeader());
+                    mVideoView.start();
+                }
                 break;
             case 3://超时换源
                 Hawk.put(HawkConfig.LIVE_CONNECT_TIMEOUT, position);

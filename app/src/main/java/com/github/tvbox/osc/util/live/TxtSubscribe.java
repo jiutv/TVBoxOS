@@ -364,7 +364,7 @@ public class TxtSubscribe {
     }
 
     private static boolean isUrl(String url) {
-        return !url.isEmpty() && (url.startsWith("http") || url.startsWith("rtp") || url.startsWith("rtsp") || url.startsWith("rtmp"));
+        return !url.isEmpty() && (url.startsWith("http") || url.startsWith("rtp") || url.startsWith("rtsp") || url.startsWith("rtmp") || url.startsWith("webview://") || url.startsWith("video://"));
     }
 
     private static String get(String line, Pattern pattern) {
