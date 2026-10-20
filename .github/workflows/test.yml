@@ -188,9 +188,27 @@ jobs:
           path: |
             TVBoxOSC/apk/*
             TVBoxOSC/build_logs/
-      - name: Whether Or Not to Publish
+      - name: Create GitHub Release 🚀
+        if: ${{ env.commit && !inputs.donotpublish }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.tag }}
+          name: TVBoxOS-${{ env.tag }}
+          body_file: TVBoxOSC/apk/${{ matrix.userName }}-Release.log
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            TVBoxOSC/apk/*.apk
+            TVBoxOSC/apk/*.tar.xz
+            TVBoxOSC/apk/*.log
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Whether Or Not to Publish (skip)
         if: ${{ inputs.donotpublish && env.commit }}
         run: |
+          echo "donotpublish=true → 跳过 Release 创建"
           echo "commit=" >> $GITHUB_ENV
   clean:
     needs: build
