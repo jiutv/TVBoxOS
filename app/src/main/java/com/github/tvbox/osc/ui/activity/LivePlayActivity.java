@@ -20,9 +20,11 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -134,6 +136,11 @@ public class LivePlayActivity extends BaseActivity {
     private FrameLayout mWebViewContainer;
     private WebView mLiveWebView;
     private boolean isWebViewPlaying = false;
+    // === WebView 抓流模式 (NewBox 风格) ===
+    private boolean isCapturingVideoUrl = false;    // 是否处于抓流模式
+    private String capturedVideoUrl = null;           // 抓到的视频 URL (m3u8/mp4)
+    private HashMap<String, String> capturedVideoHeaders = null; // 抓到的视频请求头 (带 Cookie)
+    private String webViewEntryUrl = null;            // WebView 原始入口 URL (用于 Cookie 提取)
     private View switchChannelSnapshotOverlay;
     private ImageView switchChannelSnapshotImage;
     private TextView tvChannelInfo;
@@ -1847,16 +1854,45 @@ public class LivePlayActivity extends BaseActivity {
         settings.setSupportZoom(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setSupportMultipleWindows(false);
+        // 模拟移动端浏览器（有些 PC 站不给视频）
+        settings.setUserAgentString("Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
+        // 启用 Cookie（视频请求需要）
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(mLiveWebView, true);
+        }
         mLiveWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return false; // 让 WebView 自己处理跳转
+            }
+
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 LOG.i("LiveWebView page finished: " + url);
-                // 自动播放视频 + 全屏 + 隐藏干扰元素（NewBox 风格）
-                injectAutoPlayScript(view);
+                // 如果抓流模式还没抓到视频，页面加载完再等一下 → 然后 fallback 用 WebView 自己播
+                if (isCapturingVideoUrl && capturedVideoUrl == null) {
+                    // 给视频 3 秒时间加载（很多 SPA 异步加载）
+                    mHandler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (capturedVideoUrl == null && webViewEntryUrl != null
+                                    && webViewEntryUrl.equals(view.getUrl())) {
+                                LOG.i("LiveWebView 抓流超时，fallback 到 WebView 直接播放");
+                                injectAutoPlayScript(view);
+                            }
+                        }
+                    }, 3000);
+                } else {
+                    // 不是抓流模式，或者已经抓到了，直接 fallback JS 注入
+                    injectAutoPlayScript(view);
+                }
             }
 
             @Override
@@ -1866,6 +1902,61 @@ public class LivePlayActivity extends BaseActivity {
                     LOG.i("LiveWebView error: " + error.getDescription());
                 }
             }
+
+            @Override
+            public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
+                handler.proceed(); // 忽略 SSL 错误
+            }
+
+            // === NewBox 核心：拦截所有请求，抓到 m3u8/mp4 等视频流 ===
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (!isCapturingVideoUrl || capturedVideoUrl != null) {
+                    return null; // 不抓流，或者已经抓到了，放行
+                }
+                String url = request.getUrl().toString();
+                // 跳过非 http(s)
+                if (!url.startsWith("http")) return null;
+                // 用 TVBox 自带的正则检测是否视频 URL
+                if (DefaultConfig.isVideoFormat(url)) {
+                    LOG.i("🎬 LiveWebView 抓到视频流: " + url);
+                    capturedVideoUrl = url;
+                    // 提取 WebView 为此请求准备的 headers (Referer, Cookie 等)
+                    HashMap<String, String> headers = new HashMap<>();
+                    if (request.getRequestHeaders() != null) {
+                        for (Map.Entry<String, String> e : request.getRequestHeaders().entrySet()) {
+                            String k = e.getKey();
+                            if (k.equalsIgnoreCase("referer") || k.equalsIgnoreCase("origin")
+                                    || k.equalsIgnoreCase("user-agent")) {
+                                headers.put(k, " " + e.getValue());
+                            }
+                        }
+                    }
+                    // 加上 Cookie（关键！很多视频站需要 Cookie 才能访问 m3u8）
+                    try {
+                        String cookie = CookieManager.getInstance().getCookie(url);
+                        if (cookie != null && !cookie.isEmpty()) {
+                            headers.put("Cookie", " " + cookie);
+                            LOG.i("🎬 携带 Cookie: " + cookie.length() + " bytes");
+                        }
+                    } catch (Exception ignored) {}
+                    capturedVideoHeaders = headers;
+                    // 切到 VideoView 播放！
+                    mHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            switchToCapturedVideoPlayer();
+                        }
+                    });
+                    // 返回空响应让 WebView 不要加载这个资源（但允许其他资源继续加载）
+                    try {
+                        return new WebResourceResponse("video/*", "UTF-8", null);
+                    } catch (Exception e) {
+                        return null;
+                    }
+                }
+                return null;
+            }
         });
         mLiveWebView.setWebChromeClient(new WebChromeClient());
         mLiveWebView.setLayoutParams(new ViewGroup.LayoutParams(
@@ -1874,25 +1965,54 @@ public class LivePlayActivity extends BaseActivity {
         mWebViewContainer.addView(mLiveWebView);
     }
 
+    /**
+     * 抓到视频流后，切到 VideoView 播放（NewBox 风格核心效果）
+     */
+    private void switchToCapturedVideoPlayer() {
+        if (capturedVideoUrl == null || mVideoView == null) return;
+        LOG.i("🎬 切到 VideoView 播放: " + capturedVideoUrl);
+        // 停止 WebView 继续加载
+        if (mLiveWebView != null) {
+            mLiveWebView.stopLoading();
+            mLiveWebView.loadUrl("about:blank");
+        }
+        // 隐藏 WebView 容器
+        hideWebViewPlayer();
+        // 用 VideoView 播放抓到的流
+        HashMap<String, String> header = liveChannelHeader();
+        if (capturedVideoHeaders != null) {
+            header.putAll(capturedVideoHeaders);
+        }
+        mVideoView.setUrl(capturedVideoUrl, header);
+        mVideoView.start();
+    }
+
     private void loadWebViewUrl(String url) {
         if (mLiveWebView == null) {
             initLiveWebView();
         }
         String actualUrl = stripWebViewPrefix(url);
-        LOG.i("LiveWebView loading: " + actualUrl);
+        // 重置抓流状态
+        isCapturingVideoUrl = true;
+        capturedVideoUrl = null;
+        capturedVideoHeaders = null;
+        webViewEntryUrl = actualUrl;
+        // 清 Cookie（让网页重新登录，避免脏 Cookie）
+        try {
+            CookieManager.getInstance().removeAllCookies(null);
+        } catch (Exception ignored) {}
+        LOG.i("LiveWebView loading (capture mode): " + actualUrl);
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(actualUrl);
     }
 
     /**
-     * 注入 JS 让 webview 内的 video 自动播放并全屏（NewBox 风格）
-     * - 找到 <video> 元素，play() + 静音（防 autplay 策略）+ 全屏
-     * - 隐藏页面上干扰直播的元素（header/footer/banner/下载APP引导/popup等）
+     * 注入 JS 让 webview 内的 video 自动播放并全屏（fallback，抓流失败时用）
      */
     private void injectAutoPlayScript(WebView view) {
         String js = "(function() {" +
             "try {" +
-                // 1. 隐藏常见干扰元素（高优先级）
+                // 1. 隐藏常见干扰元素
                 "var hideSelectors = ['header','footer','nav','.header','.footer','.nav','.topbar','.bottombar'," +
                     "'.banner','.popup','.modal','.dialog','.mask','.download','.app-download','.guide'," +
                     "'.ad','.ads','.advert','[class*=\"close\"]','[class*=\"popup\"]','[class*=\"mask\"]'," +
@@ -1917,7 +2037,6 @@ public class LivePlayActivity extends BaseActivity {
                     "v.playsInline = true;" +
                     "v.setAttribute('playsinline','true');" +
                     "v.setAttribute('webkit-playsinline','true');" +
-                    // 让 video 全屏铺满
                     "v.style.position = 'fixed';" +
                     "v.style.top = '0';" +
                     "v.style.left = '0';" +
@@ -1925,7 +2044,6 @@ public class LivePlayActivity extends BaseActivity {
                     "v.style.height = '100vh';" +
                     "v.style.zIndex = '999999';" +
                     "v.style.objectFit = 'contain';" +
-                    // 父容器也处理
                     "var p = v.parentElement;" +
                     "while (p && p.tagName !== 'BODY') {" +
                         "p.style.position = 'relative';" +
@@ -1936,7 +2054,6 @@ public class LivePlayActivity extends BaseActivity {
                         "p.style.overflow = 'hidden';" +
                         "p = p.parentElement;" +
                     "}" +
-                    // 尝试播放
                     "var p1 = v.play();" +
                     "if (p1 && typeof p1.catch === 'function') {" +
                         "p1.catch(function() {" +
@@ -1944,7 +2061,6 @@ public class LivePlayActivity extends BaseActivity {
                             "v.play().catch(function(){});" +
                         "});" +
                     "}" +
-                    // 延迟再 play 一次（有些页面异步加载）
                     "setTimeout(function() { v.play().catch(function(){}); }, 1500);" +
                     "setTimeout(function() { v.play().catch(function(){}); }, 3500);" +
                     "setTimeout(function() { v.play().catch(function(){}); }, 6000);" +
@@ -1961,7 +2077,6 @@ public class LivePlayActivity extends BaseActivity {
                         "}" +
                     "}, 8000);" +
                 "} else {" +
-                    // 没找到 video，可能页面用 iframe 嵌套
                     "var iframes = document.querySelectorAll('iframe');" +
                     "for (var j = 0; j < iframes.length; j++) {" +
                         "var iframe = iframes[j];" +
@@ -1979,6 +2094,11 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     private void destroyLiveWebView() {
+        // 清理抓流状态
+        isCapturingVideoUrl = false;
+        capturedVideoUrl = null;
+        capturedVideoHeaders = null;
+        webViewEntryUrl = null;
         if (mLiveWebView != null) {
             mLiveWebView.stopLoading();
             mLiveWebView.clearHistory();
@@ -2003,7 +2123,9 @@ public class LivePlayActivity extends BaseActivity {
 
     private void hideWebViewPlayer() {
         isWebViewPlaying = false;
-        mWebViewContainer.setVisibility(View.GONE);
+        if (mWebViewContainer != null) {
+            mWebViewContainer.setVisibility(View.GONE);
+        }
     }
 
     private void playLiveUrl(String url) {
@@ -2016,6 +2138,8 @@ public class LivePlayActivity extends BaseActivity {
                 mLiveWebView.stopLoading();
                 mLiveWebView.loadUrl("about:blank");
             }
+            isCapturingVideoUrl = false;
+            capturedVideoUrl = null;
             String actualUrl = stripWebViewPrefix(url);
             if (mVideoView != null) {
                 mVideoView.setUrl(actualUrl, liveChannelHeader());
