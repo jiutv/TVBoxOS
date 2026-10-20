@@ -1855,6 +1855,8 @@ public class LivePlayActivity extends BaseActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 LOG.i("LiveWebView page finished: " + url);
+                // 自动播放视频 + 全屏 + 隐藏干扰元素（NewBox 风格）
+                injectAutoPlayScript(view);
             }
 
             @Override
@@ -1880,6 +1882,100 @@ public class LivePlayActivity extends BaseActivity {
         LOG.i("LiveWebView loading: " + actualUrl);
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(actualUrl);
+    }
+
+    /**
+     * 注入 JS 让 webview 内的 video 自动播放并全屏（NewBox 风格）
+     * - 找到 <video> 元素，play() + 静音（防 autplay 策略）+ 全屏
+     * - 隐藏页面上干扰直播的元素（header/footer/banner/下载APP引导/popup等）
+     */
+    private void injectAutoPlayScript(WebView view) {
+        String js = "(function() {" +
+            "try {" +
+                // 1. 隐藏常见干扰元素（高优先级）
+                "var hideSelectors = ['header','footer','nav','.header','.footer','.nav','.topbar','.bottombar'," +
+                    "'.banner','.popup','.modal','.dialog','.mask','.download','.app-download','.guide'," +
+                    "'.ad','.ads','.advert','[class*=\"close\"]','[class*=\"popup\"]','[class*=\"mask\"]'," +
+                    "'.video-header','.player-header','.player-top','.player-bottom','.live-header'," +
+                    "#header','#footer','#nav','#topbar','#bottombar'];" +
+                "for (var i = 0; i < hideSelectors.length; i++) {" +
+                    "document.querySelectorAll(hideSelectors[i]).forEach(function(el) {" +
+                        "el.style.display = 'none';" +
+                        "el.style.visibility = 'hidden';" +
+                        "el.style.height = '0px';" +
+                    "});" +
+                "}" +
+                // 2. 让 body/html 占满 + 去滚动条
+                "var bs = document.body.style; bs.margin = '0'; bs.padding = '0'; bs.overflow = 'hidden';" +
+                "var hs = document.documentElement.style; hs.margin = '0'; hs.padding = '0'; hs.overflow = 'hidden';" +
+                // 3. 找 video 元素并自动播放
+                "var videos = document.querySelectorAll('video');" +
+                "if (videos.length > 0) {" +
+                    "var v = videos[0];" +
+                    "v.muted = false;" +
+                    "v.controls = true;" +
+                    "v.playsInline = true;" +
+                    "v.setAttribute('playsinline','true');" +
+                    "v.setAttribute('webkit-playsinline','true');" +
+                    // 让 video 全屏铺满
+                    "v.style.position = 'fixed';" +
+                    "v.style.top = '0';" +
+                    "v.style.left = '0';" +
+                    "v.style.width = '100vw';" +
+                    "v.style.height = '100vh';" +
+                    "v.style.zIndex = '999999';" +
+                    "v.style.objectFit = 'contain';" +
+                    // 父容器也处理
+                    "var p = v.parentElement;" +
+                    "while (p && p.tagName !== 'BODY') {" +
+                        "p.style.position = 'relative';" +
+                        "p.style.width = '100%';" +
+                        "p.style.height = '100%';" +
+                        "p.style.margin = '0';" +
+                        "p.style.padding = '0';" +
+                        "p.style.overflow = 'hidden';" +
+                        "p = p.parentElement;" +
+                    "}" +
+                    // 尝试播放
+                    "var p1 = v.play();" +
+                    "if (p1 && typeof p1.catch === 'function') {" +
+                        "p1.catch(function() {" +
+                            "v.muted = true;" +
+                            "v.play().catch(function(){});" +
+                        "});" +
+                    "}" +
+                    // 延迟再 play 一次（有些页面异步加载）
+                    "setTimeout(function() { v.play().catch(function(){}); }, 1500);" +
+                    "setTimeout(function() { v.play().catch(function(){}); }, 3500);" +
+                    "setTimeout(function() { v.play().catch(function(){}); }, 6000);" +
+                    "setTimeout(function() {" +
+                        "videos = document.querySelectorAll('video');" +
+                        "if (videos.length > 0) {" +
+                            "v = videos[0];" +
+                            "v.play().catch(function(){});" +
+                            "v.style.position = 'fixed';" +
+                            "v.style.top = '0';" +
+                            "v.style.left = '0';" +
+                            "v.style.width = '100vw';" +
+                            "v.style.height = '100vh';" +
+                        "}" +
+                    "}, 8000);" +
+                "} else {" +
+                    // 没找到 video，可能页面用 iframe 嵌套
+                    "var iframes = document.querySelectorAll('iframe');" +
+                    "for (var j = 0; j < iframes.length; j++) {" +
+                        "var iframe = iframes[j];" +
+                        "iframe.style.position = 'fixed';" +
+                        "iframe.style.top = '0';" +
+                        "iframe.style.left = '0';" +
+                        "iframe.style.width = '100vw';" +
+                        "iframe.style.height = '100vh';" +
+                        "iframe.style.zIndex = '999999';" +
+                    "}" +
+                "}" +
+            "} catch(e) { console.log('webview autoplay error: ' + e.message); }" +
+        "})();";
+        view.evaluateJavascript(js, null);
     }
 
     private void destroyLiveWebView() {
