@@ -141,6 +141,38 @@ public class LivePlayActivity extends BaseActivity {
     private String capturedVideoUrl = null;           // 抓到的视频 URL (m3u8/mp4)
     private HashMap<String, String> capturedVideoHeaders = null; // 抓到的视频请求头 (带 Cookie)
     private String webViewEntryUrl = null;            // WebView 原始入口 URL (用于 Cookie 提取)
+
+    /**
+     * JS 回调接口 —— 让 WebView 里 hook 到 fetch/XHR/video.src 的 m3u8 URL 能传回 Java
+     * 解决 Android WebView shouldInterceptRequest 不拦截 fetch()/异步 XHR 的问题
+     */
+    private class VideoUrlHookInterface {
+        @android.webkit.JavascriptInterface
+        public void onVideoUrlFound(String url) {
+            if (url == null || url.isEmpty()) return;
+            LOG.i("🎯 JS hook 抓到视频 URL: " + url);
+            if (isCapturingVideoUrl && capturedVideoUrl == null
+                    && (url.contains(".m3u8") || url.contains(".mp4") || url.contains(".flv")
+                        || url.contains(".mpd") || url.contains(".ts"))) {
+                capturedVideoUrl = url;
+                HashMap<String, String> headers = new HashMap<>();
+                headers.put("Referer", " " + webViewEntryUrl);
+                try {
+                    String cookie = CookieManager.getInstance().getCookie(url);
+                    if (cookie != null && !cookie.isEmpty()) {
+                        headers.put("Cookie", " " + cookie);
+                    }
+                } catch (Exception ignored) {}
+                capturedVideoHeaders = headers;
+                mHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        switchToCapturedVideoPlayer();
+                    }
+                });
+            }
+        }
+    }
     private View switchChannelSnapshotOverlay;
     private ImageView switchChannelSnapshotImage;
     private TextView tvChannelInfo;
@@ -1866,6 +1898,8 @@ public class LivePlayActivity extends BaseActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             cookieManager.setAcceptThirdPartyCookies(mLiveWebView, true);
         }
+        // 注册 JS 回调接口 —— 让 fetch/XHR hook 能把 m3u8 URL 传回 Java
+        mLiveWebView.addJavascriptInterface(new VideoUrlHookInterface(), "_tvbox");
         mLiveWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -1873,24 +1907,35 @@ public class LivePlayActivity extends BaseActivity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                LOG.i("LiveWebView onPageStarted (注入JS hook): " + url);
+                // 在页面加载初期就注入 fetch/XHR hook —— CMG 播放器用 fetch，shouldInterceptRequest 抓不到！
+                if (isCapturingVideoUrl) {
+                    view.evaluateJavascript(buildFetchHookJs(), null);
+                }
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 LOG.i("LiveWebView page finished: " + url);
-                // 如果抓流模式还没抓到视频，页面加载完再等一下 → 然后 fallback 用 WebView 自己播
+                // 再注入一次（SPA 可能替换整个 DOM）
+                if (isCapturingVideoUrl) {
+                    view.evaluateJavascript(buildFetchHookJs(), null);
+                }
+                // 如果抓流模式还没抓到视频，给 8 秒等待 → 超时后 fallback 到 WebView 直接播
                 if (isCapturingVideoUrl && capturedVideoUrl == null) {
-                    // 给视频 3 秒时间加载（很多 SPA 异步加载）
                     mHandler.postDelayed(new Runnable() {
                         @Override
                         public void run() {
-                            if (capturedVideoUrl == null && webViewEntryUrl != null
-                                    && webViewEntryUrl.equals(view.getUrl())) {
-                                LOG.i("LiveWebView 抓流超时，fallback 到 WebView 直接播放");
+                            if (capturedVideoUrl == null) {
+                                LOG.i("LiveWebView 8秒内没抓到视频流，fallback 到 WebView 直接播放");
                                 injectAutoPlayScript(view);
                             }
                         }
-                    }, 3000);
-                } else {
-                    // 不是抓流模式，或者已经抓到了，直接 fallback JS 注入
+                    }, 8000);
+                } else if (!isCapturingVideoUrl) {
                     injectAutoPlayScript(view);
                 }
             }
@@ -2004,6 +2049,99 @@ public class LivePlayActivity extends BaseActivity {
         LOG.i("LiveWebView loading (capture mode): " + actualUrl);
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(actualUrl);
+    }
+
+    /**
+     * 构建 JS hook 代码 —— 同时 hook fetch / XHR / video.src / HTMLVideoElement.prototype.src setter
+     * 解决 Android WebView shouldInterceptRequest 不拦截 fetch()/异步 XHR 的问题
+     */
+    private String buildFetchHookJs() {
+        return "(function() {" +
+            "if (window._tvboxHooked) return;" +
+            "window._tvboxHooked = true;" +
+            "var tvbox = window._tvbox;" +
+            "var detectVideo = function(url) {" +
+                "if (!url || typeof url !== 'string') return false;" +
+                "try { url = new URL(url, location.href).href; } catch(e) {}" +
+                "return /\\.(m3u8|mp4|flv|mpd|ts|m4v|mkv)(\\?|#|$)/i.test(url);" +
+            "};" +
+            "var fire = function(url) {" +
+                "try { if (tvbox && tvbox.onVideoUrlFound) tvbox.onVideoUrlFound(url); } catch(e) {}" +
+                "try { console.log('🎯tvbox抓流:', url); } catch(e) {}" +
+            "};" +
+            // Hook fetch
+            "if (window.fetch) {" +
+                "var _f = window.fetch;" +
+                "window.fetch = function(input, init) {" +
+                    "var u = typeof input === 'string' ? input : (input && input.url ? input.url : '');" +
+                    "if (detectVideo(u)) fire(u);" +
+                    "return _f.apply(this, arguments);" +
+                "};" +
+            "}" +
+            // Hook XHR
+            "if (window.XMLHttpRequest) {" +
+                "var _o = XMLHttpRequest.prototype.open;" +
+                "XMLHttpRequest.prototype.open = function(method, url) {" +
+                    "if (detectVideo(url)) fire(url);" +
+                    "return _o.apply(this, arguments);" +
+                "};" +
+                "var _s = XMLHttpRequest.prototype.send;" +
+                "XMLHttpRequest.prototype.send = function() {" +
+                    "var u = this._url || this.responseURL || '';" +
+                    "if (detectVideo(u)) fire(u);" +
+                    "return _s.apply(this, arguments);" +
+                "};" +
+            "}" +
+            // Hook video.src setter + HTMLSourceElement
+            "try {" +
+                "var _vs = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'src');" +
+                "if (_vs && _vs.set) {" +
+                    "Object.defineProperty(HTMLVideoElement.prototype, 'src', {" +
+                        "get: _vs.get," +
+                        "set: function(v) { if (detectVideo(v)) fire(v); return _vs.set.call(this, v); }," +
+                        "configurable: true" +
+                    "});" +
+                "}" +
+                "var _hs = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, 'src');" +
+                "if (_hs && _hs.set) {" +
+                    "Object.defineProperty(HTMLSourceElement.prototype, 'src', {" +
+                        "get: _hs.get," +
+                        "set: function(v) { if (detectVideo(v)) fire(v); return _hs.set.call(this, v); }," +
+                        "configurable: true" +
+                    "});" +
+                "}" +
+                "var _ls = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'currentSrc');" +
+                "} catch(e) {}" +
+            // MutationObserver 监听 video/src 变化
+            "try {" +
+                "var _mo = new MutationObserver(function(muts) {" +
+                    "for (var i = 0; i < muts.length; i++) {" +
+                        "var n = muts[i].nextSibling || muts[i].target;" +
+                        "if (n && (n.tagName === 'VIDEO' || n.tagName === 'SOURCE')) {" +
+                            "var u = n.src || '';" +
+                            "if (detectVideo(u)) fire(u);" +
+                        "}" +
+                    "}" +
+                "});" +
+                "_mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });" +
+                "} catch(e) {}" +
+            // 全局 fetch 再次 hook —— 有些播放器用 window.fetch.bind(undefined)
+            "setTimeout(function() {" +
+                "if (window.fetch && !window._tvboxFpHooked2) {" +
+                    "window._tvboxFpHooked2 = true;" +
+                    "var _f2 = window.fetch;" +
+                    "window.fetch = function() {" +
+                        "try {" +
+                            "var a = arguments;" +
+                            "var u = typeof a[0] === 'string' ? a[0] : (a[0] && a[0].url ? a[0].url : '');" +
+                            "if (detectVideo(u)) fire(u);" +
+                        "} catch(e) {}" +
+                        "return _f2.apply(this, arguments);" +
+                    "};" +
+                "}" +
+            "}, 0);" +
+            "console.log('📺 TVBox fetch/XHR hook 已注入');" +
+        "})();";
     }
 
     /**
