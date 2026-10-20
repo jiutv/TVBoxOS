@@ -116,6 +116,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.LinkedList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -134,6 +136,12 @@ public class LivePlayActivity extends BaseActivity {
     private FrameLayout mWebViewContainer;
     private WebView mLiveWebView;
     private boolean isWebViewPlaying = false;
+    // === WebView 网页嗅探字段 (对齐 PlayFragment) ===
+    private final Map<String, Boolean> loadedUrls = new HashMap<>();
+    private final LinkedList<String> loadFoundVideoUrls = new LinkedList<>();
+    private final HashMap<String, HashMap<String, String>> loadFoundVideoUrlsHeader = new HashMap<>();
+    private final AtomicInteger loadFoundCount = new AtomicInteger(0);
+    private String webViewEntryUrl = null;
     private View switchChannelSnapshotOverlay;
     private ImageView switchChannelSnapshotImage;
     private TextView tvChannelInfo;
@@ -1847,8 +1855,16 @@ public class LivePlayActivity extends BaseActivity {
         settings.setSupportZoom(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setSupportMultipleWindows(false);
+        // 桌面 UA —— 央视频等网站移动端 UA 会重定向到 m.子域，嗅探失效
+        settings.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
+        android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cm.setAcceptThirdPartyCookies(mLiveWebView, true);
         }
         mLiveWebView.setWebViewClient(new WebViewClient() {
             @Override
@@ -1864,6 +1880,53 @@ public class LivePlayActivity extends BaseActivity {
                     LOG.i("LiveWebView error: " + error.getDescription());
                 }
             }
+
+            // === PlayFragment 同款 checkIsVideo —— 网页嗅探核心 ===
+            private WebResourceResponse checkIsVideo(String url, HashMap<String, String> headers) {
+                if (url.endsWith("/favicon.ico")) return null;
+                // VideoParseRuler 是 TVBox 整个生态用的网页嗅探引擎
+                boolean isFilter = com.github.tvbox.osc.util.VideoParseRuler.isFilter(webViewEntryUrl, url);
+                if (isFilter) return null;
+                boolean ad;
+                if (!loadedUrls.containsKey(url)) {
+                    ad = com.github.tvbox.osc.util.AdBlocker.isAd(url);
+                    loadedUrls.put(url, ad);
+                } else {
+                    ad = Boolean.TRUE.equals(loadedUrls.get(url));
+                }
+                if (!ad) {
+                    if (com.github.tvbox.osc.util.VideoParseRuler.checkIsVideoForParse(webViewEntryUrl, url)) {
+                        loadFoundVideoUrls.add(url);
+                        loadFoundVideoUrlsHeader.put(url, headers);
+                        LOG.i("echo-loadFoundVideoUrl:" + url);
+                        if (loadFoundCount.incrementAndGet() == 1) {
+                            stopLoadWebView(false);
+                            String foundUrl = loadFoundVideoUrls.poll();
+                            String cookie = android.webkit.CookieManager.getInstance().getCookie(foundUrl);
+                            if (cookie != null && !cookie.isEmpty()) headers.put("Cookie", " " + cookie);
+                            HashMap<String, String> finalHeaders = headers;
+                            mHandler.post(() -> playWebFoundUrl(foundUrl, finalHeaders));
+                        }
+                    }
+                }
+                return (ad || loadFoundCount.get() > 0) ? com.github.tvbox.osc.util.AdBlocker.createEmptyResource() : null;
+            }
+
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                if (!url.startsWith("http")) return null;
+                HashMap<String, String> webHeaders = new HashMap<>();
+                Map<String, String> hds = request.getRequestHeaders();
+                if (hds != null) {
+                    for (String k : hds.keySet()) {
+                        if (k.equalsIgnoreCase("user-agent") || k.equalsIgnoreCase("referer") || k.equalsIgnoreCase("origin")) {
+                            webHeaders.put(k, " " + hds.get(k));
+                        }
+                    }
+                }
+                return checkIsVideo(url, webHeaders);
+            }
         });
         mLiveWebView.setWebChromeClient(new WebChromeClient());
         mLiveWebView.setLayoutParams(new ViewGroup.LayoutParams(
@@ -1877,9 +1940,43 @@ public class LivePlayActivity extends BaseActivity {
             initLiveWebView();
         }
         String actualUrl = stripWebViewPrefix(url);
+        // 重置 PlayFragment 风格的嗅探状态
+        loadedUrls.clear();
+        loadFoundVideoUrls.clear();
+        loadFoundVideoUrlsHeader.clear();
+        loadFoundCount.set(0);
+        webViewEntryUrl = actualUrl;
+        try { android.webkit.CookieManager.getInstance().removeAllCookies(null); } catch (Exception ignored) {}
         LOG.i("LiveWebView loading: " + actualUrl);
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(actualUrl);
+    }
+
+    void stopLoadWebView(boolean destroy) {
+        if (mLiveWebView != null) {
+            mLiveWebView.stopLoading();
+            mLiveWebView.loadUrl("about:blank");
+            if (destroy) {
+                mLiveWebView.clearCache(true);
+                mLiveWebView.removeAllViews();
+                mLiveWebView.destroy();
+                mLiveWebView = null;
+            }
+        }
+    }
+
+    /**
+     * WebView 嗅探到视频流后切 VideoView 播放
+     */
+    private void playWebFoundUrl(String url, HashMap<String, String> headers) {
+        if (url == null || mVideoView == null) return;
+        LOG.i("🎬 切到 VideoView 播放: " + url);
+        stopLoadWebView(false);
+        hideWebViewPlayer();
+        HashMap<String, String> header = liveChannelHeader();
+        if (headers != null) header.putAll(headers);
+        mVideoView.setUrl(url, header);
+        mVideoView.start();
     }
 
     private void destroyLiveWebView() {
@@ -1911,7 +2008,8 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     private void playLiveUrl(String url) {
-        if (isWebViewUrl(url)) {
+        // NewTOS 三条路：直连 / video://嗅探 / webview://网页兜底
+        if (isWebViewUrl(url) || isVideoOverrideUrl(url)) {
             showWebViewPlayer();
             loadWebViewUrl(url);
         } else {
