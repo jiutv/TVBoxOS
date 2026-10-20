@@ -2267,7 +2267,8 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     private void playLiveUrl(String url) {
-        if (isWebViewUrl(url)) {
+        // === NewTOS 三条路：直连 / video://嗅探 / webview://网页兜底 ===
+        if (isWebViewUrl(url) || isVideoOverrideUrl(url)) {
             showWebViewPlayer();
             loadWebViewUrl(url);
         } else {
@@ -2279,6 +2280,7 @@ public class LivePlayActivity extends BaseActivity {
             isCapturingVideoUrl = false;
             capturedVideoUrl = null;
             String actualUrl = stripWebViewPrefix(url);
+            LOG.i("Live 直连播放: " + actualUrl);
             if (mVideoView != null) {
                 mVideoView.setUrl(actualUrl, liveChannelHeader());
                 mVideoView.start();
