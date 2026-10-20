@@ -136,6 +136,29 @@ public class LivePlayActivity extends BaseActivity {
     private FrameLayout mWebViewContainer;
     private WebView mLiveWebView;
     private boolean isWebViewPlaying = false;
+    // === WebView JS 嗅探循环状态 ===
+    private static final int SNIFF_MAX_RETRY = 12;           // 最多重试 12 次
+    private static final long SNIFF_RETRY_INTERVAL_MS = 800L; // 每 800ms 一次，总超时 ~10s
+    private int sniffRetryCount = 0;
+    private boolean sniffFound = false;
+    private String sniffPageUrl = null;
+    private final Runnable sniffRetryRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (sniffFound || mLiveWebView == null) return;
+            if (sniffRetryCount >= SNIFF_MAX_RETRY) {
+                LOG.i("🎯 嗅探循环超时（10s, " + SNIFF_MAX_RETRY + " 次），放弃");
+                Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            sniffRetryCount++;
+            LOG.i("🎯 嗅探第 " + sniffRetryCount + "/" + SNIFF_MAX_RETRY + " 次");
+            doInjectJsSniff(mLiveWebView, sniffPageUrl);
+            if (!sniffFound) {
+                mHandler.postDelayed(this, SNIFF_RETRY_INTERVAL_MS);
+            }
+        }
+    };
     private View switchChannelSnapshotOverlay;
     private ImageView switchChannelSnapshotImage;
     private TextView tvChannelInfo;
@@ -1843,9 +1866,9 @@ public class LivePlayActivity extends BaseActivity {
         settings.setSupportZoom(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setSupportMultipleWindows(false);
-        // 桌面 UA —— 避免央视频等网站检测到移动端后重定向到 m.子域
-        settings.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        // 标准 Android 手机浏览器 UA
+        settings.setUserAgentString("Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
@@ -1864,9 +1887,12 @@ public class LivePlayActivity extends BaseActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 LOG.i("LiveWebView page finished: " + url);
-                // === JS 嗅探：找 video/source/iframe 的视频地址 ===
-                // 等 1.5 秒让播放器初始化完成（很多站 onPageFinished 时 video 还没 src）
-                mHandler.postDelayed(() -> injectJsSniff(view, url), 1500);
+                // 启动嗅探循环：800ms 一次，最多 12 次（10s 超时）
+                sniffFound = false;
+                sniffRetryCount = 0;
+                sniffPageUrl = url;
+                mHandler.removeCallbacks(sniffRetryRunnable);
+                mHandler.postDelayed(sniffRetryRunnable, 300); // 第一次等 300ms 让 DOM 渲染
             }
             @Override
             public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
@@ -1880,6 +1906,8 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     void stopLoadWebView(boolean destroy) {
+        mHandler.removeCallbacks(sniffRetryRunnable); // 立刻停嗅探循环
+        sniffFound = true;
         if (mLiveWebView != null) {
             mLiveWebView.stopLoading();
             mLiveWebView.loadUrl("about:blank");
@@ -1893,63 +1921,94 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     /**
-     * JS 嗅探：从 DOM 里找 video/source/iframe 的 src 视频地址
-     * 抓到后关 WebView → ExoPlayer 播放；抓不到 Toast 提示
+     * 注入 JS 嗅探 DOM —— currentSrc 优先、只收 http 开头链接
+     * 结果回调里判断：抓到→stop循环+切ExoPlayer；没抓到→sniffRetryRunnable 继续重试/超时
      */
-    private void injectJsSniff(WebView view, String pageUrl) {
-        if (view == null) return;
+    private void doInjectJsSniff(WebView view, String pageUrl) {
+        if (view == null || sniffFound) return;
+        // currentSrc 优先（<video> 真正在播的地址），其次 src；<source> 同理
         String js = "(function() {" +
-            "var urls = [];" +
-            "document.querySelectorAll('video').forEach(function(v) {" +
-            "  if (v.src) urls.push(v.src);" +
-            "  v.querySelectorAll('source').forEach(function(s) { if (s.src) urls.push(s.src); });" +
-            "});" +
-            "document.querySelectorAll('source').forEach(function(s) { if (s.src) urls.push(s.src); });" +
-            "document.querySelectorAll('iframe').forEach(function(f) { if (f.src) urls.push(f.src); });" +
-            "urls = [...new Set(urls)];" +
-            "var pat = /m3u8|mp4|flv|mpd|\\.ts|m4v|video|hls|cdn|stream|live/i;" +
-            "var filtered = urls.filter(function(u) { return pat.test(u); });" +
-            "return JSON.stringify(filtered);" +
+            "var result = [];" +
+            "var videos = document.querySelectorAll('video');" +
+            "for (var i = 0; i < videos.length; i++) {" +
+            "  var v = videos[i];" +
+            "  var url = v.currentSrc || v.src;" +
+            "  if (url && typeof url === 'string' && url.indexOf('http') === 0) result.push(url);" +
+            "  var sources = v.querySelectorAll('source');" +
+            "  for (var j = 0; j < sources.length; j++) {" +
+            "    var s = sources[j];" +
+            "    var su = s.currentSrc || s.src;" +
+            "    if (su && typeof su === 'string' && su.indexOf('http') === 0) result.push(su);" +
+            "  }" +
+            "}" +
+            "var allSources = document.querySelectorAll('source');" +
+            "for (var k = 0; k < allSources.length; k++) {" +
+            "  var s2 = allSources[k];" +
+            "  var su2 = s2.currentSrc || s2.src;" +
+            "  if (su2 && typeof su2 === 'string' && su2.indexOf('http') === 0) result.push(su2);" +
+            "}" +
+            "var allIframes = document.querySelectorAll('iframe');" +
+            "for (var m = 0; m < allIframes.length; m++) {" +
+            "  var f = allIframes[m];" +
+            "  var fu = f.src;" +
+            "  if (fu && typeof fu === 'string' && fu.indexOf('http') === 0) result.push(fu);" +
+            "}" +
+            "var uniq = [];" +
+            "var seen = {};" +
+            "for (var n = 0; n < result.length; n++) {" +
+            "  if (!seen[result[n]]) { seen[result[n]] = true; uniq.push(result[n]); }" +
+            "}" +
+            "return JSON.stringify({count: videos.length, urls: uniq});" +
             "})();";
         view.evaluateJavascript(js, value -> {
-            LOG.i("🎯 JS 嗅探结果: " + value);
-            if (value == null || value.length() < 3) {
-                LOG.i("🎯 JS 嗅探：没找到视频地址");
-                Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
-                return;
+            if (sniffFound) return; // 已经抓到了，忽略后续回调
+            LOG.i("🎯 嗅探回调 #" + sniffRetryCount + " 原始: " + value);
+            if (value == null || value.length() < 5) {
+                LOG.i("🎯 嗅探 #" + sniffRetryCount + ": 无返回");
+                return; // sniffRetryRunnable 会继续重试
             }
             try {
-                org.json.JSONArray arr = new org.json.JSONArray(value);
-                if (arr.length() == 0) {
-                    Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                String foundUrl = arr.getString(0);
-                if (foundUrl == null || !foundUrl.startsWith("http")) {
-                    Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                LOG.i("🎬 JS 嗅探抓到视频: " + foundUrl);
-                // 关 WebView，切 ExoPlayer
-                if (mLiveWebView != null) {
-                    mLiveWebView.stopLoading();
-                    mLiveWebView.loadUrl("about:blank");
-                }
-                hideWebViewPlayer();
-                HashMap<String, String> header = liveChannelHeader();
-                // 带 Cookie（很多视频站需要）
-                try {
-                    String cookie = android.webkit.CookieManager.getInstance().getCookie(foundUrl);
-                    if (cookie != null && !cookie.isEmpty()) header.put("Cookie", " " + cookie);
-                } catch (Exception ignored) {}
-                header.put("Referer", " " + pageUrl);
-                if (mVideoView != null) {
-                    mVideoView.setUrl(foundUrl, header);
-                    mVideoView.start();
+                org.json.JSONObject obj = new org.json.JSONObject(value);
+                int videoCount = obj.optInt("count", 0);
+                org.json.JSONArray arr = obj.optJSONArray("urls");
+                LOG.i("🎯 嗅探 #" + sniffRetryCount + ": 页面video数=" + videoCount + ", 候选链接数=" + (arr == null ? 0 : arr.length()));
+                if (arr != null && arr.length() > 0) {
+                    // 打印所有候选链接（调试）
+                    for (int i = 0; i < arr.length(); i++) {
+                        LOG.i("🎯   候选[" + i + "]: " + arr.getString(i));
+                    }
+                    // 取第一个 http 开头的
+                    String foundUrl = null;
+                    for (int i = 0; i < arr.length(); i++) {
+                        String u = arr.getString(i);
+                        if (u.startsWith("http")) { foundUrl = u; break; }
+                    }
+                    if (foundUrl != null) {
+                        sniffFound = true;
+                        mHandler.removeCallbacks(sniffRetryRunnable);
+                        LOG.i("🎬 嗅探抓到视频: " + foundUrl);
+                        // 关 WebView，切 ExoPlayer
+                        if (mLiveWebView != null) {
+                            mLiveWebView.stopLoading();
+                            mLiveWebView.loadUrl("about:blank");
+                        }
+                        hideWebViewPlayer();
+                        HashMap<String, String> header = liveChannelHeader();
+                        try {
+                            String cookie = android.webkit.CookieManager.getInstance().getCookie(foundUrl);
+                            if (cookie != null && !cookie.isEmpty()) header.put("Cookie", " " + cookie);
+                        } catch (Exception ignored) {}
+                        header.put("Referer", " " + pageUrl);
+                        if (mVideoView != null) {
+                            mVideoView.setUrl(foundUrl, header);
+                            mVideoView.start();
+                        }
+                    }
+                } else {
+                    LOG.i("🎯 嗅探 #" + sniffRetryCount + ": 候选为空");
                 }
             } catch (Exception e) {
-                LOG.i("🎯 JS 嗅探解析失败: " + e.getMessage());
-                Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
+                LOG.i("🎯 嗅探 #" + sniffRetryCount + " 解析异常: " + e.getMessage());
             }
         });
     }
@@ -1957,8 +2016,14 @@ public class LivePlayActivity extends BaseActivity {
     private void loadWebViewUrl(String url) {
         if (mLiveWebView == null) initLiveWebView();
         String actualUrl = stripWebViewPrefix(url);
+        // reset 嗅探状态（新页面从头开始）
+        sniffFound = false;
+        sniffRetryCount = 0;
+        sniffPageUrl = actualUrl;
+        mHandler.removeCallbacks(sniffRetryRunnable);
         LOG.i("LiveWebView loading: " + actualUrl);
         stopLoadWebView(false);
+        sniffFound = false; // stopLoadWebView 会设 true，这里重置回来
         mLiveWebView.loadUrl(actualUrl);
     }
 
