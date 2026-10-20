@@ -1887,9 +1887,11 @@ public class LivePlayActivity extends BaseActivity {
         settings.setSupportZoom(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setSupportMultipleWindows(false);
-        // 模拟移动端浏览器（有些 PC 站不给视频）
-        settings.setUserAgentString("Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+        // ⚠️ 关键！用桌面 UA —— 很多网站（央视频等）检测到移动端 UA 会重定向到 m.子域名
+        // 重定向后的 URL 不匹配 isMainPageUrl → hook 永远装不上！
+        // 桌面 UA 能让 PC 端的播放器脚本正常加载并让我们拦截
+        settings.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
@@ -2069,19 +2071,48 @@ public class LivePlayActivity extends BaseActivity {
 
     /**
      * 判断某个 URL 是否是主页面（我们拦截的目标）
-     * 只拦截一次：跟 webViewEntryUrl 同一个 host + path 前缀
+     * 策略：只要是 http(s) 的 HTML 文档请求（非 js/css/img/font/mp4/m3u8），且跟入口 URL 同一个根域名
+     * 就拦截并注入 hook。这样即使中间发生重定向也能命中。
      */
     private boolean isMainPageUrl(String url) {
         if (webViewEntryUrl == null || url == null) return false;
         if (!url.startsWith("http") || !webViewEntryUrl.startsWith("http")) return false;
+        // 排除静态资源（这些绝不能被拦截！）
+        String lower = url.toLowerCase();
+        String[] excludeExts = {".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+                ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".m3u8", ".flv", ".ts", ".mpd",
+                ".json", ".xml", ".txt", ".pdf", ".zip", ".tar", ".gz", ".map", ".wasm", ".worker"};
+        for (String ext : excludeExts) {
+            if (lower.contains(ext)) return false;
+        }
         try {
             java.net.URL entry = new java.net.URL(webViewEntryUrl);
             java.net.URL cur = new java.net.URL(url);
-            return entry.getHost().equalsIgnoreCase(cur.getHost())
-                    && cur.getPath().startsWith(entry.getPath().isEmpty() ? "/" : entry.getPath());
+            // 同一个根域名（允许重定向到 m.xxx / www.xxx / 任何子域）
+            String entryHost = entry.getHost();
+            String curHost = cur.getHost();
+            // 提取根域名
+            String entryRoot = getRootDomain(entryHost);
+            String curRoot = getRootDomain(curHost);
+            if (!entryRoot.equalsIgnoreCase(curRoot)) return false;
         } catch (Exception e) {
-            return url.equals(webViewEntryUrl) || url.startsWith(webViewEntryUrl + "?");
+            return false;
         }
+        return true;
+    }
+
+    /**
+     * 从 host 提取根域名。例如 m.yangshipin.cn → yangshipin.cn
+     */
+    private String getRootDomain(String host) {
+        if (host == null) return "";
+        int idx = host.lastIndexOf('.');
+        if (idx < 0) return host;
+        String tld = host.substring(idx + 1);  // cn
+        String rest = host.substring(0, idx);  // m.yangshipin
+        int idx2 = rest.lastIndexOf('.');
+        if (idx2 < 0) return host;
+        return rest.substring(idx2 + 1) + "." + tld;
     }
 
     /**
