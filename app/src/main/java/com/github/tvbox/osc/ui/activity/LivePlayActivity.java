@@ -21,10 +21,6 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
-import com.github.tvbox.osc.util.AdBlocker;
-import com.github.tvbox.osc.util.VideoParseRuler;
-import java.util.LinkedList;
-import java.util.concurrent.atomic.AtomicInteger;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -140,12 +136,6 @@ public class LivePlayActivity extends BaseActivity {
     private FrameLayout mWebViewContainer;
     private WebView mLiveWebView;
     private boolean isWebViewPlaying = false;
-    // === WebView 抓流 (完全对齐 PlayFragment 成熟实现) ===
-    private final Map<String, Boolean> loadedUrls = new HashMap<>();
-    private final java.util.LinkedList<String> loadFoundVideoUrls = new java.util.LinkedList<>();
-    private final HashMap<String, HashMap<String, String>> loadFoundVideoUrlsHeader = new HashMap<>();
-    private final java.util.concurrent.atomic.AtomicInteger loadFoundCount = new java.util.concurrent.atomic.AtomicInteger(0);
-    private String webViewEntryUrl = null;            // WebView 原始入口 URL（用于 VideoParseRuler + Cookie）
     private View switchChannelSnapshotOverlay;
     private ImageView switchChannelSnapshotImage;
     private TextView tvChannelInfo;
@@ -1879,56 +1869,6 @@ public class LivePlayActivity extends BaseActivity {
             public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
                 handler.proceed();
             }
-
-            // === PlayFragment 同款 checkIsVideo ===
-            private WebResourceResponse checkIsVideo(String url, HashMap<String, String> headers) {
-                if (url.endsWith("/favicon.ico")) return null;
-                boolean isFilter = VideoParseRuler.isFilter(webViewEntryUrl, url);
-                if (isFilter) return null;
-                boolean ad;
-                if (!loadedUrls.containsKey(url)) {
-                    ad = AdBlocker.isAd(url);
-                    loadedUrls.put(url, ad);
-                } else {
-                    ad = Boolean.TRUE.equals(loadedUrls.get(url));
-                }
-                if (!ad) {
-                    if (VideoParseRuler.checkIsVideoForParse(webViewEntryUrl, url)) {
-                        loadFoundVideoUrls.add(url);
-                        loadFoundVideoUrlsHeader.put(url, headers);
-                        LOG.i("echo-loadFoundVideoUrl:" + url);
-                        if (loadFoundCount.incrementAndGet() == 1) {
-                            stopLoadWebView(false);
-                            String foundUrl = loadFoundVideoUrls.poll();
-                            String cookie = CookieManager.getInstance().getCookie(foundUrl);
-                            if (cookie != null && !cookie.isEmpty()) headers.put("Cookie", " " + cookie);
-                            mHandler.post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    playWebFoundUrl(foundUrl, headers);
-                                }
-                            });
-                        }
-                    }
-                }
-                return ad || loadFoundCount.get() > 0 ? AdBlocker.createEmptyResource() : null;
-            }
-
-            @Override
-            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString();
-                if (!url.startsWith("http")) return null;
-                HashMap<String, String> webHeaders = new HashMap<>();
-                Map<String, String> hds = request.getRequestHeaders();
-                if (hds != null) {
-                    for (String k : hds.keySet()) {
-                        if (k.equalsIgnoreCase("user-agent") || k.equalsIgnoreCase("referer") || k.equalsIgnoreCase("origin")) {
-                            webHeaders.put(k, " " + hds.get(k));
-                        }
-                    }
-                }
-                return checkIsVideo(url, webHeaders);
-            }
         });
         mLiveWebView.setWebChromeClient(new WebChromeClient());
         mLiveWebView.setLayoutParams(new ViewGroup.LayoutParams(
@@ -1949,30 +1889,9 @@ public class LivePlayActivity extends BaseActivity {
         }
     }
 
-    /**
-     * WebView 抓到视频流后切到 VideoView 播放
-     */
-    private void playWebFoundUrl(String url, HashMap<String, String> headers) {
-        if (url == null || mVideoView == null) return;
-        LOG.i("🎬 切到 VideoView 播放: " + url);
-        stopLoadWebView(false);
-        hideWebViewPlayer();
-        HashMap<String, String> header = liveChannelHeader();
-        if (headers != null) header.putAll(headers);
-        mVideoView.setUrl(url, header);
-        mVideoView.start();
-    }
-
     private void loadWebViewUrl(String url) {
         if (mLiveWebView == null) initLiveWebView();
         String actualUrl = stripWebViewPrefix(url);
-        // 重置 PlayFragment 风格的抓流状态
-        loadedUrls.clear();
-        loadFoundVideoUrls.clear();
-        loadFoundVideoUrlsHeader.clear();
-        loadFoundCount.set(0);
-        webViewEntryUrl = actualUrl;
-        try { CookieManager.getInstance().removeAllCookies(null); } catch (Exception ignored) {}
         LOG.i("LiveWebView loading: " + actualUrl);
         stopLoadWebView(false);
         mLiveWebView.loadUrl(actualUrl);
