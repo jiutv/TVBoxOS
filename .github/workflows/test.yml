@@ -156,18 +156,25 @@ jobs:
         run: |
           rm -rf apk/
           mkdir -p apk/
-          for file in `find ~ -name "*release*.apk" -print`; do
-            # 获取文件的基本名称
+          # 更可靠地找 release APK：引号防止 glob 展开，搜索所有可能位置
+          mapfile -t apk_list < <(find "$HOME" -type f -name '*.apk' 2>/dev/null | grep '/release/')
+          echo "🔍 找到 ${#apk_list[@]} 个 release APK"
+          for file in "${apk_list[@]}"; do
             base=$(basename "$file")
-            # 如果文件是 TVBox_ 开头
             if [[ "$base" == TVBox_* ]]; then
               new_base=$(echo "$base" | sed "s/release/${{ matrix.userName }}_${{ env.tag }}/")
             else
               new_base="TVBox_${{ matrix.userName }}_${{ env.tag }}.apk"
             fi
-            # 移动并重命名文件
+            echo "  mv $base → apk/$new_base"
             mv "$file" "apk/$new_base"
           done
+          echo "📦 apk/ 目录内容："
+          ls -lah apk/
+          if [ ${#apk_list[@]} -eq 0 ]; then
+            echo "⚠️ 警告：没有找到任何 release APK！"
+            exit 1
+          fi
           mv sourceCode-${{ env.commitS }}.* apk/
       - name: Release Note
         if: ${{ env.commit }}
@@ -204,7 +211,6 @@ jobs:
             TVBoxOSC/apk/*.apk
             TVBoxOSC/apk/*.tar.xz
             TVBoxOSC/apk/*.log
-          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Whether Or Not to Publish (skip)
