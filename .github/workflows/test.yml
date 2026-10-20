@@ -17,6 +17,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -190,11 +192,11 @@ jobs:
             TVBoxOSC/build_logs/
       - name: Create GitHub Release 🚀
         if: ${{ env.commit && !inputs.donotpublish }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.tag }}
           name: TVBoxOS-${{ env.tag }}
-          body_file: TVBoxOSC/apk/${{ matrix.userName }}-Release.log
+          body_path: TVBoxOSC/apk/${{ matrix.userName }}-Release.log
           generate_release_notes: true
           draft: false
           prerelease: false
