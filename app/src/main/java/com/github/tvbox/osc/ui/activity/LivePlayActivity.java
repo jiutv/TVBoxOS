@@ -1864,6 +1864,9 @@ public class LivePlayActivity extends BaseActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 LOG.i("LiveWebView page finished: " + url);
+                // === JS 嗅探：找 video/source/iframe 的视频地址 ===
+                // 等 1.5 秒让播放器初始化完成（很多站 onPageFinished 时 video 还没 src）
+                mHandler.postDelayed(() -> injectJsSniff(view, url), 1500);
             }
             @Override
             public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
@@ -1887,6 +1890,68 @@ public class LivePlayActivity extends BaseActivity {
                 mLiveWebView = null;
             }
         }
+    }
+
+    /**
+     * JS 嗅探：从 DOM 里找 video/source/iframe 的 src 视频地址
+     * 抓到后关 WebView → ExoPlayer 播放；抓不到 Toast 提示
+     */
+    private void injectJsSniff(WebView view, String pageUrl) {
+        if (view == null) return;
+        String js = "(function() {" +
+            "var urls = [];" +
+            "document.querySelectorAll('video').forEach(function(v) {" +
+            "  if (v.src) urls.push(v.src);" +
+            "  v.querySelectorAll('source').forEach(function(s) { if (s.src) urls.push(s.src); });" +
+            "});" +
+            "document.querySelectorAll('source').forEach(function(s) { if (s.src) urls.push(s.src); });" +
+            "document.querySelectorAll('iframe').forEach(function(f) { if (f.src) urls.push(f.src); });" +
+            "urls = [...new Set(urls)];" +
+            "var pat = /m3u8|mp4|flv|mpd|\\.ts|m4v|video|hls|cdn|stream|live/i;" +
+            "var filtered = urls.filter(function(u) { return pat.test(u); });" +
+            "return JSON.stringify(filtered);" +
+            "})();";
+        view.evaluateJavascript(js, value -> {
+            LOG.i("🎯 JS 嗅探结果: " + value);
+            if (value == null || value.length() < 3) {
+                LOG.i("🎯 JS 嗅探：没找到视频地址");
+                Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(value);
+                if (arr.length() == 0) {
+                    Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String foundUrl = arr.getString(0);
+                if (foundUrl == null || !foundUrl.startsWith("http")) {
+                    Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                LOG.i("🎬 JS 嗅探抓到视频: " + foundUrl);
+                // 关 WebView，切 ExoPlayer
+                if (mLiveWebView != null) {
+                    mLiveWebView.stopLoading();
+                    mLiveWebView.loadUrl("about:blank");
+                }
+                hideWebViewPlayer();
+                HashMap<String, String> header = liveChannelHeader();
+                // 带 Cookie（很多视频站需要）
+                try {
+                    String cookie = android.webkit.CookieManager.getInstance().getCookie(foundUrl);
+                    if (cookie != null && !cookie.isEmpty()) header.put("Cookie", " " + cookie);
+                } catch (Exception ignored) {}
+                header.put("Referer", " " + pageUrl);
+                if (mVideoView != null) {
+                    mVideoView.setUrl(foundUrl, header);
+                    mVideoView.start();
+                }
+            } catch (Exception e) {
+                LOG.i("🎯 JS 嗅探解析失败: " + e.getMessage());
+                Toast.makeText(LivePlayActivity.this, "未能提取视频资源", Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     private void loadWebViewUrl(String url) {
@@ -1915,8 +1980,8 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     private void playLiveUrl(String url) {
-        // NewTOS 三条路：直连 / video://嗅探 / webview://网页兜底
-        if (isWebViewUrl(url) || isVideoOverrideUrl(url)) {
+        // 只有 webview:// 走 WebView + JS 嗅探
+        if (isWebViewUrl(url)) {
             showWebViewPlayer();
             loadWebViewUrl(url);
         } else {
