@@ -2,4 +2,5 @@ rootProject.name = "TVBox"
 include ':app'
 include ':player'
 include ':quickjs'
-include ':pyramid'
+// pyramid 模块需要 chaquo，暂时跳过
+// include ':pyramid'
