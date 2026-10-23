@@ -308,7 +308,7 @@ jobs:
             TVBoxOSC/apk/*
             TVBoxOSC/build_logs/
       - name: Create GitHub Release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
+        if: ${{ env.commit && (github.event_name != 'workflow_dispatch' || inputs.donotpublish != true) }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
