@@ -203,47 +203,24 @@ jobs:
           path: |
             TVBoxOSC/apk/*
             TVBoxOSC/build_logs/
-      - name: Whether Or Not to Publish
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == true && env.commit }}
-        run: |
-          echo "commit=" >> $GITHUB_ENV
-          echo "⚠️ 已勾选 donotpublish，跳过 Release 发布"
-      - name: Prepare APKs for Release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
-        shell: bash
-        run: |
-          set -e
-          echo "=== TVBoxOSC/apk/ 目录内容 ==="
-          ls -la TVBoxOSC/apk/
-          echo ""
-          echo "=== 查找所有 APK ==="
-          shopt -s nullglob
-          apks=(TVBoxOSC/apk/*.apk)
-          if [ ${#apks[@]} -eq 0 ]; then
-            echo "❌ TVBoxOSC/apk/ 下没有 APK！"
-            echo "=== find ~ 搜索 ==="
-            find ~ -name "*.apk" 2>/dev/null | head -20
-            exit 1
-          fi
-          echo "找到 ${#apks[@]} 个 APK："
-          ls -la "${apks[@]}"
-          echo ""
-          echo "=== 复制到 repo root ==="
-          cp -v "${apks[@]}" ./
-          echo ""
-          echo "=== repo root 下的 APK ==="
-          ls -la ./*.apk
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.tag }}
-          name: TVBoxOS ${{ env.tag }}
-          body_path: TVBoxOSC/apk/${{ matrix.userName }}-Release.log
-          files: ./*.apk
-          draft: false
-          prerelease: false
-          fail_on_unmatched_files: true
+        run: |
+          set -e
+          echo "=== TVBoxOSC/apk/ 目录 ==="
+          ls -la TVBoxOSC/apk/
+          echo ""
+          echo "=== 检查 gh CLI ==="
+          gh --version
+          echo ""
+          echo "=== 创建 Release ${{ env.tag }} ==="
+          gh release create "${{ env.tag }}" \
+            TVBoxOSC/apk/*.apk \
+            --title "TVBoxOS ${{ env.tag }}" \
+            --notes-file "TVBoxOSC/apk/${{ matrix.userName }}-Release.log" \
+            --target "${{ github.sha }}" \
+            --latest
+          echo "✅ Release 创建成功：https://github.com/${{ github.repository }}/releases/tag/${{ env.tag }}"
   clean:
     needs: build
     runs-on: ubuntu-latest
