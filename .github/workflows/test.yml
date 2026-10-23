@@ -129,6 +129,7 @@ jobs:
           java-version: '11'
       - uses: gradle/actions/setup-gradle@v4
         if: ${{ env.commit }}
+        working-directory: TVBoxOSC
       - name: Generate local.properties
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
