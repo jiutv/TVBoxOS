@@ -1,5 +1,8 @@
 name: Test
 
+permissions:
+  contents: write
+
 on:
   schedule:
     - cron: 0 13 1 * *
@@ -204,6 +207,19 @@ jobs:
         if: ${{ inputs.donotpublish && env.commit }}
         run: |
           echo "commit=" >> $GITHUB_ENV
+      - name: Create GitHub Release
+        if: ${{ !inputs.donotpublish && env.commit }}
+        permissions:
+          contents: write
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.tag }}
+          name: TVBoxOS ${{ env.tag }}
+          body_path: TVBoxOSC/apk/${{ matrix.userName }}-Release.log
+          files: TVBoxOSC/apk/*.apk
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false
   clean:
     needs: build
     runs-on: ubuntu-latest
