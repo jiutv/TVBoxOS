@@ -150,8 +150,27 @@ jobs:
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
+          echo "========== 诊断信息 =========="
+          echo "RUNNER_OS=$RUNNER_OS"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "env.commit=${{ env.commit }}"
+          echo "git HEAD=$(git rev-parse HEAD 2>/dev/null || echo 'not a git repo')"
+          echo "git log -1: $(git log --oneline -1 2>/dev/null || true)"
+          echo ""
+          echo "=== gradle.properties (全文) ==="
+          cat gradle.properties
+          echo ""
+          echo "=== system proxy env ==="
+          env | grep -i proxy || echo "no proxy env vars"
+          echo ""
+          echo "=== JAVA_HOME & java -version ==="
+          echo "JAVA_HOME=$JAVA_HOME"
+          java -version 2>&1
+          echo ""
+          echo "=== gradle wrapper ==="
+          cat gradle/wrapper/gradle-wrapper.properties
+          echo "=============================="
           chmod +x gradlew
-          # 逐个 flavor 独立构建，互不影响，确保全部产出
           mkdir -p build_logs
           for flavor in java java32 java64 python python32 python64; do
             echo "===== Building flavor: $flavor ====="
