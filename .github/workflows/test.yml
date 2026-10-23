@@ -204,11 +204,12 @@ jobs:
             TVBoxOSC/apk/*
             TVBoxOSC/build_logs/
       - name: Whether Or Not to Publish
-        if: ${{ inputs.donotpublish && env.commit }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == true && env.commit }}
         run: |
           echo "commit=" >> $GITHUB_ENV
+          echo "⚠️ 已勾选 donotpublish，跳过 Release 发布"
       - name: Create GitHub Release
-        if: ${{ !inputs.donotpublish && env.commit }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.tag }}
@@ -217,7 +218,7 @@ jobs:
           files: TVBoxOSC/apk/*.apk
           draft: false
           prerelease: false
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
   clean:
     needs: build
     runs-on: ubuntu-latest
