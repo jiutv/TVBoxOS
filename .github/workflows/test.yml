@@ -33,9 +33,12 @@ jobs:
         run: |
           upStream=https://github.com/${{ matrix.userName }}/${{ matrix.repoName }}
           echo "upStream=$upStream" >> $GITHUB_ENV
-          commit=$(curl -sL $upStream/commits/${{ matrix.branchName }} |grep -o "/${{ matrix.userName }}/${{ matrix.repoName }}/commit/[a-z0-9]\+" |head -1 | cut -d\/ -f5)
+          # 用 git ls-remote 直接问远端 main 的真实 HEAD —— 不依赖网页 HTML 缓存！
+          commit=$(git ls-remote "$upStream.git" refs/heads/${{ matrix.branchName }} | awk '{print $1; exit}')
+          echo "git ls-remote result commit=$commit"
           if [[ -z "${commit}" ]]; then
-            commit=$(curl -s "https://api.github.com/repos/${{ matrix.userName }}/${{ matrix.repoName }}/commits/${{ matrix.branchName }}?per_page=1" | jq -r '.sha' )
+            commit=$(curl -sL "$upStream/commits/${{ matrix.branchName }}" | grep -o "/${{ matrix.userName }}/${{ matrix.repoName }}/commit/[a-z0-9]\+" | head -1 | cut -d\/ -f5)
+            echo "curl fallback commit=$commit"
           fi
           if ! grep -q "$commit" README.md || [ "${{ inputs.rebuild }}" == "true" ]; then
             echo "commit=$commit" >> $GITHUB_ENV
@@ -45,9 +48,18 @@ jobs:
       - name: Checkout Source Code
         if: ${{ env.commit }}
         run: |
-          git clone ${{ env.upStream }} TVBoxOSC
+          git clone --depth 200 "$upStream" TVBoxOSC
           cd TVBoxOSC
-          git checkout ${{ env.commit }}
+          # 强制 fetch main 最新，绕过缓存
+          git fetch origin main --depth=200
+          # 如果 env.commit 是 HEAD 就直接检出，否则 checkout 指定 SHA
+          head_sha=$(git rev-parse origin/main)
+          echo "origin/main HEAD=$head_sha env.commit=${{ env.commit }}"
+          if [ "${{ env.commit }}" = "$head_sha" ]; then
+            git checkout origin/main
+          else
+            git checkout ${{ env.commit }} || git checkout origin/main
+          fi
           echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
       - name: Extra Modify
         if: ${{ env.commit }}
