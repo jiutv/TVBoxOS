@@ -172,6 +172,7 @@ jobs:
           echo "=============================="
           chmod +x gradlew
           mkdir -p build_logs
+          FAILED=0
           for flavor in java java32 java64 python python32 python64; do
             echo "===== Building flavor: $flavor ====="
             if ./gradlew "assemble${flavor^}Release" --build-cache --stacktrace --warning-mode all > "build_logs/${flavor}.log" 2>&1; then
@@ -179,27 +180,56 @@ jobs:
             else
               echo "❌ $flavor FAILED (详见 build_logs/${flavor}.log)"
               tail -80 "build_logs/${flavor}.log"
+              FAILED=$((FAILED+1))
             fi
           done
           echo "===== 全部 flavor 构建结束 ====="
+          echo "成功: $((6-FAILED)) / 失败: $FAILED"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "❌ 有 $FAILED 个 flavor 构建失败，退出码 1"
+            exit 1
+          fi
+          echo "✅ 全部 6 个 flavor 构建成功！"
       - name: Prepare App
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           rm -rf apk/
           mkdir -p apk/
-          for file in `find ~ -name "*release*.apk" -print`; do
-            # 获取文件的基本名称
+          echo "===== 搜索 APK ====="
+          echo "当前 pwd=$(pwd)"
+          echo "$HOME=$HOME"
+          echo ""
+          echo "=== app/build/outputs/apk 目录 ==="
+          find app/build/outputs/apk -name "*.apk" -print 2>/dev/null || echo "(不存在)"
+          echo ""
+          echo "=== find ~ -name '*release*.apk' ==="
+          find ~ -name "*release*.apk" -print 2>/dev/null
+          echo ""
+          echo "=== find . -name '*.apk' ==="
+          find . -name "*.apk" -print 2>/dev/null
+          echo ""
+          echo "===== 开始复制 ====="
+          for file in $(find app/build/outputs/apk -name "*.apk" -print 2>/dev/null; find ~ -name "*release*.apk" -print 2>/dev/null); do
             base=$(basename "$file")
-            # 如果文件是 TVBox_ 开头
+            echo "  找到: $file  →  base=$base"
             if [[ "$base" == TVBox_* ]]; then
               new_base=$(echo "$base" | sed "s/release/${{ matrix.userName }}_${{ env.tag }}/")
             else
               new_base="TVBox_${{ matrix.userName }}_${{ env.tag }}.apk"
             fi
-            # 移动并重命名文件
-            mv "$file" "apk/$new_base"
+            cp "$file" "apk/$new_base"
           done
+          echo ""
+          echo "===== apk/ 目录最终内容 ====="
+          ls -la apk/
+          echo ""
+          APK_COUNT=$(ls apk/*.apk 2>/dev/null | wc -l)
+          echo "APK 数量: $APK_COUNT"
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "❌ 0 个 APK！Build 可能全部失败了！"
+            exit 1
+          fi
           mv sourceCode-${{ env.commitS }}.* apk/
       - name: Release Note
         if: ${{ env.commit }}
