@@ -211,14 +211,27 @@ jobs:
       - name: Prepare APKs for Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
         run: |
+          set -e
           echo "=== TVBoxOSC/apk/ 目录内容 ==="
-          ls -la TVBoxOSC/apk/ || echo "❌ apk/ 目录不存在"
+          ls -la TVBoxOSC/apk/
           echo ""
-          echo "=== 复制 APK 到 repo root（绕开 action-gh-release glob bug）==="
-          cp -v TVBoxOSC/apk/*.apk ./ 2>&1 || echo "❌ 没有 APK 可复制！"
+          echo "=== 查找所有 APK ==="
+          shopt -s nullglob
+          apks=(TVBoxOSC/apk/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "❌ TVBoxOSC/apk/ 下没有 APK！"
+            echo "=== find ~ 搜索 ==="
+            find ~ -name "*.apk" 2>/dev/null | head -20
+            exit 1
+          fi
+          echo "找到 ${#apks[@]} 个 APK："
+          ls -la "${apks[@]}"
+          echo ""
+          echo "=== 复制到 repo root ==="
+          cp -v "${apks[@]}" ./
           echo ""
           echo "=== repo root 下的 APK ==="
-          ls -la ./*.apk 2>&1
+          ls -la ./*.apk
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
         uses: softprops/action-gh-release@v2
