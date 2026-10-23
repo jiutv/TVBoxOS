@@ -224,6 +224,8 @@ jobs:
             TVBoxOSC/build_logs/
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           echo "=== TVBoxOSC/apk/ 目录 ==="
