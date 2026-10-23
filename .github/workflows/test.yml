@@ -208,6 +208,17 @@ jobs:
         run: |
           echo "commit=" >> $GITHUB_ENV
           echo "⚠️ 已勾选 donotpublish，跳过 Release 发布"
+      - name: Prepare APKs for Release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
+        run: |
+          echo "=== TVBoxOSC/apk/ 目录内容 ==="
+          ls -la TVBoxOSC/apk/ || echo "❌ apk/ 目录不存在"
+          echo ""
+          echo "=== 复制 APK 到 repo root（绕开 action-gh-release glob bug）==="
+          cp -v TVBoxOSC/apk/*.apk ./ 2>&1 || echo "❌ 没有 APK 可复制！"
+          echo ""
+          echo "=== repo root 下的 APK ==="
+          ls -la ./*.apk 2>&1
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
         uses: softprops/action-gh-release@v2
@@ -215,7 +226,7 @@ jobs:
           tag_name: ${{ env.tag }}
           name: TVBoxOS ${{ env.tag }}
           body_path: TVBoxOSC/apk/${{ matrix.userName }}-Release.log
-          files: TVBoxOSC/apk/*.apk
+          files: ./*.apk
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
