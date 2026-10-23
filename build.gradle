@@ -4,7 +4,11 @@ buildscript {
         gradlePluginPortal()
         google()
         mavenCentral()
-        maven { url "https://chaquo.com/maven" }
+        maven { url "https://jitpack.io" }
+        maven { url "https://maven.aliyun.com/repository/public" }
+        maven { url "https://maven.aliyun.com/repository/releases" }
+        maven { url "https://storage.googleapis.com/r8-releases/raw" }
+                maven { url "https://chaquo.com/maven" }
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:7.2.2'
@@ -19,7 +23,9 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        maven { url "https://chaquo.com/maven" }
+                maven { url "https://jitpack.io" }
+        maven { url "https://maven.aliyun.com/repository/public" }
+        maven { url "https://maven.aliyun.com/repository/releases" }
         gradlePluginPortal()
     }
 }
