@@ -127,6 +127,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '11'
+      - uses: gradle/actions/setup-gradle@v4
+        if: ${{ env.commit }}
       - name: Generate local.properties
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
@@ -153,7 +155,7 @@ jobs:
           mkdir -p build_logs
           for flavor in java java32 java64 python python32 python64; do
             echo "===== Building flavor: $flavor ====="
-            if ./gradlew "assemble${flavor^}Release" --no-build-cache --stacktrace --warning-mode all > "build_logs/${flavor}.log" 2>&1; then
+            if ./gradlew "assemble${flavor^}Release" --build-cache --stacktrace --warning-mode all > "build_logs/${flavor}.log" 2>&1; then
               echo "✅ $flavor OK"
             else
               echo "❌ $flavor FAILED (详见 build_logs/${flavor}.log)"
