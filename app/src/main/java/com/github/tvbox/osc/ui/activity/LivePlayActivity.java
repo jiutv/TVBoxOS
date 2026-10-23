@@ -19,6 +19,12 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -107,6 +113,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.LinkedList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -124,6 +132,14 @@ import xyz.doikki.videoplayer.player.VideoView;
 public class LivePlayActivity extends BaseActivity {
     public static Context context;
     private VideoView<xyz.doikki.videoplayer.player.AbstractPlayer> mVideoView;
+    private FrameLayout mWebViewContainer;
+    private WebView mLiveWebView;
+    private boolean isWebViewPlaying = false;
+    private final Map<String, Boolean> loadedUrls = new HashMap<>();
+    private final LinkedList<String> loadFoundVideoUrls = new LinkedList<>();
+    private final HashMap<String, HashMap<String, String>> loadFoundVideoUrlsHeader = new HashMap<>();
+    private final AtomicInteger loadFoundCount = new AtomicInteger(0);
+    private String webViewEntryUrl = null;
     private View switchChannelSnapshotOverlay;
     private ImageView switchChannelSnapshotImage;
     private TextView tvChannelInfo;
@@ -262,6 +278,7 @@ public class LivePlayActivity extends BaseActivity {
 
         setLoadSir(findViewById(R.id.live_root));
         mVideoView = findViewById(R.id.mVideoView);
+        mWebViewContainer = findViewById(R.id.mWebViewContainer);
         switchChannelSnapshotOverlay = findViewById(R.id.switchChannelSnapshotOverlay);
         switchChannelSnapshotImage = findViewById(R.id.switchChannelSnapshotImage);
 
@@ -1345,6 +1362,7 @@ public class LivePlayActivity extends BaseActivity {
         super.onDestroy();
         Hawk.put(HawkConfig.PLAYER_IS_LIVE, false);
         hideSwitchChannelSnapshot();
+        destroyLiveWebView();
         if (mVideoView != null) {
             mVideoView.release();
             mVideoView = null;
@@ -1353,6 +1371,155 @@ public class LivePlayActivity extends BaseActivity {
         mHandler.removeCallbacks(mUpdateResolutionInfoRun);
         mHandler.removeCallbacks(mHideResolutionInfoRun);
     }
+
+    // ============ WebView 网页嗅探直播支持 ============
+
+    private void showWebViewPlayer() {
+        isWebViewPlaying = true;
+        if (mVideoView != null && mVideoView.getCurrentPlayState() != VideoView.STATE_IDLE) {
+            mVideoView.release();
+        }
+        if (mWebViewContainer != null) {
+            mWebViewContainer.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void hideWebViewPlayer() {
+        isWebViewPlaying = false;
+        if (mWebViewContainer != null) {
+            mWebViewContainer.setVisibility(View.GONE);
+        }
+    }
+
+    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
+    private void initLiveWebView() {
+        if (mLiveWebView != null) return;
+        mLiveWebView = new WebView(this);
+        WebSettings s = mLiveWebView.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
+        s.setAllowFileAccess(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
+        s.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
+        android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            cm.setAcceptThirdPartyCookies(mLiveWebView, true);
+        }
+        mLiveWebView.setWebChromeClient(new WebChromeClient());
+        mLiveWebView.setWebViewClient(new WebViewClient() {
+            private WebResourceResponse checkIsVideo(String url, HashMap<String, String> headers) {
+                if (url.endsWith("/favicon.ico")) return null;
+                boolean isFilter = com.github.tvbox.osc.util.VideoParseRuler.isFilter(webViewEntryUrl, url);
+                if (isFilter) return null;
+                boolean ad;
+                if (!loadedUrls.containsKey(url)) {
+                    ad = com.github.tvbox.osc.util.AdBlocker.isAd(url);
+                    loadedUrls.put(url, ad);
+                } else {
+                    ad = Boolean.TRUE.equals(loadedUrls.get(url));
+                }
+                if (!ad) {
+                    if (com.github.tvbox.osc.util.VideoParseRuler.checkIsVideoForParse(webViewEntryUrl, url)) {
+                        loadFoundVideoUrls.add(url);
+                        loadFoundVideoUrlsHeader.put(url, headers);
+                        LOG.i("echo-loadFoundVideoUrl:" + url);
+                        if (loadFoundCount.incrementAndGet() == 1) {
+                            stopLoadWebView(false);
+                            String foundUrl = loadFoundVideoUrls.poll();
+                            String cookie = android.webkit.CookieManager.getInstance().getCookie(foundUrl);
+                            if (cookie != null && !cookie.isEmpty()) headers.put("Cookie", " " + cookie);
+                            HashMap<String, String> finalHeaders = headers;
+                            mHandler.post(() -> playWebFoundUrl(foundUrl, finalHeaders));
+                        }
+                    }
+                }
+                return (ad || loadFoundCount.get() > 0)
+                        ? com.github.tvbox.osc.util.AdBlocker.createEmptyResource() : null;
+            }
+
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                if (!url.startsWith("http")) return null;
+                HashMap<String, String> webHeaders = new HashMap<>();
+                Map<String, String> hds = request.getRequestHeaders();
+                if (hds != null) {
+                    for (String k : hds.keySet()) {
+                        if (k.equalsIgnoreCase("user-agent") || k.equalsIgnoreCase("referer") || k.equalsIgnoreCase("origin")) {
+                            webHeaders.put(k, " " + hds.get(k));
+                        }
+                    }
+                }
+                return checkIsVideo(url, webHeaders);
+            }
+        });
+        mLiveWebView.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        if (mWebViewContainer != null) {
+            mWebViewContainer.addView(mLiveWebView);
+        }
+    }
+
+    private void loadWebViewUrl(String url) {
+        if (mLiveWebView == null) {
+            initLiveWebView();
+        }
+        loadedUrls.clear();
+        loadFoundVideoUrls.clear();
+        loadFoundVideoUrlsHeader.clear();
+        loadFoundCount.set(0);
+        webViewEntryUrl = url;
+        try {
+            android.webkit.CookieManager.getInstance().removeAllCookies(null);
+        } catch (Exception ignored) {
+        }
+        LOG.i("LiveWebView loading: " + url);
+        mLiveWebView.stopLoading();
+        mLiveWebView.loadUrl(url);
+    }
+
+    private void stopLoadWebView(boolean destroy) {
+        if (mLiveWebView != null) {
+            mLiveWebView.stopLoading();
+            mLiveWebView.loadUrl("about:blank");
+            if (destroy) {
+                mLiveWebView.clearCache(true);
+                mLiveWebView.removeAllViews();
+                mLiveWebView.destroy();
+                mLiveWebView = null;
+            }
+        }
+    }
+
+    private void destroyLiveWebView() {
+        stopLoadWebView(true);
+        hideWebViewPlayer();
+        if (mWebViewContainer != null) {
+            mWebViewContainer.removeAllViews();
+        }
+    }
+
+    private void playWebFoundUrl(String url, HashMap<String, String> headers) {
+        if (url == null || mVideoView == null) return;
+        LOG.i("🎬 WebView 嗅探到视频流，切到 VideoView: " + url);
+        stopLoadWebView(false);
+        hideWebViewPlayer();
+        HashMap<String, String> header = liveChannelHeader();
+        if (headers != null) header.putAll(headers);
+        mVideoView.setUrl(url, header);
+        mVideoView.start();
+    }
+
+    // ============ WebView 网页嗅探直播支持结束 ============
 
     private void showChannelList() {
         if (tvRightSettingLayout.getVisibility() == View.VISIBLE) {
@@ -1833,13 +2000,23 @@ public class LivePlayActivity extends BaseActivity {
                 hideSwitchChannelSnapshot();
             }
             String liveUrl = currentLiveChannelItem.getUrl();
-            if (reusePlayer) {
-                mVideoView.setUrl(liveUrl, liveChannelHeader());
-                mVideoView.replay(true);
+            if (liveUrl != null && liveUrl.startsWith("webview://")) {
+                showWebViewPlayer();
+                loadWebViewUrl(liveUrl.substring(10));
             } else {
-                mVideoView.release();
-                mVideoView.setUrl(liveUrl,liveChannelHeader());
-                mVideoView.start();
+                hideWebViewPlayer();
+                if (mLiveWebView != null) {
+                    mLiveWebView.stopLoading();
+                    mLiveWebView.loadUrl("about:blank");
+                }
+                if (reusePlayer) {
+                    mVideoView.setUrl(liveUrl, liveChannelHeader());
+                    mVideoView.replay(true);
+                } else {
+                    mVideoView.release();
+                    mVideoView.setUrl(liveUrl,liveChannelHeader());
+                    mVideoView.start();
+                }
             }
             showResolutionAfterChannelSwitch();
         }
