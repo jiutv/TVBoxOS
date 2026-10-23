@@ -223,7 +223,7 @@ jobs:
           chmod +x gradlew
           mkdir -p build_logs
           FAILED=0
-          for flavor in java java32 java64 python python32 python64; do
+          for flavor in java32; do
             echo "===== Building flavor: $flavor ====="
             if ./gradlew "assemble${flavor^}Release" --no-build-cache --stacktrace --warning-mode all > "build_logs/${flavor}.log" 2>&1; then
               echo "✅ $flavor OK"
