@@ -209,8 +209,6 @@ jobs:
           echo "commit=" >> $GITHUB_ENV
       - name: Create GitHub Release
         if: ${{ !inputs.donotpublish && env.commit }}
-        permissions:
-          contents: write
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.tag }}
