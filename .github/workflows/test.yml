@@ -210,6 +210,7 @@ jobs:
           echo "⚠️ 已勾选 donotpublish，跳过 Release 发布"
       - name: Prepare APKs for Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.donotpublish == false && env.commit }}
+        shell: bash
         run: |
           set -e
           echo "=== TVBoxOSC/apk/ 目录内容 ==="
