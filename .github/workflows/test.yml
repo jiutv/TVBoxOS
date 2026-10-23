@@ -127,9 +127,56 @@ jobs:
         with:
           distribution: temurin
           java-version: '11'
+      - name: Pre-download Gradle 7.5 (runner 连不上 services.gradle.org)
+        if: ${{ env.commit }}
+        run: |
+          GRADLE_VER="gradle-7.5-bin"
+          GRADLE_HOME="$HOME/.gradle/wrapper/dists/$GRADLE_VER"
+          # gradle wrapper 内部 hash（固定值）
+          HASH_DIR=$(echo -n "https://services.gradle.org/distributions/$GRADLE_VER.zip" | sha256sum | cut -c1-8)
+          TARGET="$GRADLE_HOME/$HASH_DIR"
+          echo "TARGET=$TARGET"
+          if [ -d "$TARGET/gradle-7.5" ]; then
+            echo "✅ Gradle 7.5 已存在，跳过下载"
+          else
+            mkdir -p "$TARGET"
+            cd "$TARGET"
+            ZIP="$GRADLE_VER.zip"
+            echo "正在下载 $GRADLE_VER ..."
+            for url in \
+              "https://services.gradle.org/distributions/$GRADLE_VER.zip" \
+              "https://mirrors.cloud.tencent.com/gradle/$GRADLE_VER.zip" \
+              "https://mirrors.tuna.tsinghua.edu.cn/gradle/$GRADLE_VER.zip" \
+              "https://mirrors.huaweicloud.com/gradle/$GRADLE_VER.zip"; do
+              echo "  尝试: $url"
+              if curl -fsSL --connect-timeout 10 -o "$ZIP" "$url"; then
+                echo "✅ 下载成功: $url"
+                break
+              fi
+              echo "  ❌ 失败"
+            done
+            if [ ! -f "$ZIP" ]; then
+              echo "❌ 所有镜像都下载失败"
+              exit 1
+            fi
+            echo "正在解压..."
+            unzip -q "$ZIP"
+            rm -f "$ZIP"
+            echo "✅ Gradle 7.5 安装完成"
+            ls -la
+          fi
+      - name: Cache Gradle Build & Maven
+        if: ${{ env.commit }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.m2/repository
+          key: gradle-build-${{ runner.os }}-${{ hashFiles('TVBoxOSC/**/*.gradle', 'TVBoxOSC/**/gradle.properties') }}
+          restore-keys: |
+            gradle-build-${{ runner.os }}-
       - uses: gradle/actions/setup-gradle@v4
         if: ${{ env.commit }}
-        working-directory: TVBoxOSC
       - name: Generate local.properties
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
