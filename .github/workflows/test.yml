@@ -223,11 +223,16 @@ jobs:
           FAILED=0
           for flavor in java java32 java64 python python32 python64; do
             echo "===== Building flavor: $flavor ====="
-            if ./gradlew "assemble${flavor^}Release" --build-cache --stacktrace --warning-mode all > "build_logs/${flavor}.log" 2>&1; then
+            if ./gradlew "assemble${flavor^}Release" --no-build-cache --stacktrace --warning-mode all > "build_logs/${flavor}.log" 2>&1; then
               echo "✅ $flavor OK"
             else
-              echo "❌ $flavor FAILED (详见 build_logs/${flavor}.log)"
-              tail -80 "build_logs/${flavor}.log"
+              echo "❌ $flavor FAILED"
+              echo ""
+              echo "=== 关键错误行（grep）==="
+              grep -nE "error:|FAILURE|What went wrong|Execution failed|Could not resolve|cannot find symbol|incompatible types|找不到符号|错误:" "build_logs/${flavor}.log" | head -30 || echo "(无匹配)"
+              echo ""
+              echo "=== tail -200 ==="
+              tail -200 "build_logs/${flavor}.log"
               FAILED=$((FAILED+1))
             fi
           done
