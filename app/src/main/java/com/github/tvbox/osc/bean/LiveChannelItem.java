@@ -211,6 +211,11 @@ public class LiveChannelItem {
         return channelUrls.get(sourceIndex);
     }
 
+    // 临时覆盖当前源的 url（供直播播放线路选择时加 scheme 前缀用），调用方负责后续还原
+    public void setUrl(String url) {
+        channelUrls.set(sourceIndex, url);
+    }
+
     public int getSourceNum() {
         return sourceNum;
     }
