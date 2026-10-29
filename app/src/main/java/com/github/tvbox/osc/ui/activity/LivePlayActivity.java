@@ -10,6 +10,7 @@ import android.animation.IntEvaluator;
 import android.animation.ObjectAnimator;
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.CountDownTimer;
@@ -172,6 +173,7 @@ public class LivePlayActivity extends BaseActivity {
     private boolean exitingLivePlay = false;
     private static final long EPG_LOAD_DELAY = 1200L;
     private static final int RESOLUTION_INFO_MAX_RETRY = 10;
+    private static final int REQUEST_FULL_WEB_SNIFF = 5001;
     private static final long RESOLUTION_INFO_RETRY_DELAY = 300L;
     private static final long RESOLUTION_INFO_HIDE_DELAY = 3000L;
     private static final String DEFAULT_EPG_ADDRESS = "http://epg.51zmt.top:8000/api/diyp/?ch={name}&date={date}";
@@ -1346,6 +1348,25 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        try {
+            if (requestCode == REQUEST_FULL_WEB_SNIFF && resultCode == RESULT_OK && data != null) {
+                String streamUrl = data.getStringExtra(FullWebActivity.RESULT_STREAM_URL);
+                String headersEncoded = data.getStringExtra(FullWebActivity.RESULT_STREAM_HEADERS);
+                LOG.i("🎬 FullWebActivity sniff 回传: " + streamUrl);
+                if (streamUrl != null && !streamUrl.isEmpty()) {
+                    java.util.HashMap<String, String> headers = FullWebActivity.decodeHeaders(headersEncoded);
+                    hideWebViewPlayer();
+                    playWebFoundUrl(streamUrl, headers);
+                }
+            }
+        } catch (Throwable t) {
+            LOG.i("onActivityResult REQUEST_FULL_WEB_SNIFF crash: " + t);
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         exitingLivePlay = false;
@@ -2389,18 +2410,30 @@ public class LivePlayActivity extends BaseActivity {
             } catch (Throwable ignored) {}
 
             if ("webview".equals(dispatchTag)) {
-                // ==== webview://（对标 NewBox）====
-                // 后台隐藏 WebView 加载 → shouldInterceptRequest 嗅探直链 → 抓到立即切 VideoView 原生播
-                // 嗅探失败则留在 WebView（showWebViewPlayer 已调用，页面兜底播）
-                LOG.i("🎬 直播线路：webview://嗅探（NewBox 风格） → " + pureUrl);
-                showWebViewPlayer();
-                loadWebViewUrl(pureUrl, true);
+                // ==== webview://（NewBox 风格）====
+                // 跳独立全屏 WebView Activity，网页自己播 HTML5 video
+                // 不嗅探、不拦截、不劫持资源 — 让网页原生处理
+                LOG.i("🎬 直播线路：webview:// 跳 FullWebActivity browse → " + pureUrl);
+                try {
+                    Intent it = new Intent(this, FullWebActivity.class);
+                    it.putExtra(FullWebActivity.EXTRA_URL, pureUrl);
+                    startActivity(it);
+                } catch (Throwable t) {
+                    LOG.i("webview:// 启动 FullWebActivity 失败：" + t);
+                }
 
             } else if ("webview-sniff".equals(dispatchTag)) {
-                // ==== webview-sniff://（同上，保留独立协议兼容配置）====
-                LOG.i("🎬 直播线路：webview-sniff://嗅探 → " + pureUrl);
-                showWebViewPlayer();
-                loadWebViewUrl(pureUrl, true);
+                // ==== webview-sniff://（保留协议兼容配置）====
+                // 跳 FullWebActivity sniff 模式：嗅探抓到流 → setResult 回切 VideoView
+                LOG.i("🎬 直播线路：webview-sniff:// 跳 FullWebActivity sniff → " + pureUrl);
+                try {
+                    Intent it = new Intent(this, FullWebActivity.class);
+                    it.putExtra(FullWebActivity.EXTRA_URL, pureUrl);
+                    it.putExtra(FullWebActivity.EXTRA_MODE, FullWebActivity.MODE_SNIFF);
+                    startActivityForResult(it, REQUEST_FULL_WEB_SNIFF);
+                } catch (Throwable t) {
+                    LOG.i("webview-sniff:// 启动 FullWebActivity 失败：" + t);
+                }
 
             } else if ("video".equals(dispatchTag)) {
                 // ==== 线路2：video:// 嗅探（保留原有机制）====
