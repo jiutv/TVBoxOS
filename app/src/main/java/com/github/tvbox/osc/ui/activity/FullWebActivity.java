@@ -239,6 +239,26 @@ public class FullWebActivity extends BaseActivity {
         public void onPageFinished(WebView view, String url) {
             showTopBar();
             super.onPageFinished(view, url);
+            // 网页加载完 → 注入 JS 自动触发 <video> 播放
+            // cmcMediaPlayer.js / HLS.js / DASH.js 等播放器内部用 fetch 动态加载流，
+            // 但 <video> 元素还是需要一次 play() 触发才能开始渲染画面
+            mHandler.postDelayed(() -> {
+                try {
+                    if (mWebView != null) {
+                        String autoPlayJs =
+                            "(function(){" +
+                            "  var videos = document.querySelectorAll('video');" +
+                            "  for (var i = 0; i < videos.length; i++) {" +
+                            "    try { videos[i].muted = true; } catch(e){}" +
+                            "    try { videos[i].play(); } catch(e){}" +
+                            "  }" +
+                            "})();";
+                        mWebView.evaluateJavascript(autoPlayJs, null);
+                    }
+                } catch (Throwable t) {
+                    LOG.i("BrowseWebViewClient onPageFinished autoPlay crash: " + t);
+                }
+            }, 800);
         }
 
         @Override
