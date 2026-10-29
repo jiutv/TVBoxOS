@@ -3,6 +3,7 @@ package com.github.tvbox.osc.ui.activity;
 import static xyz.doikki.videoplayer.util.PlayerUtils.safeTimeMs;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.IntEvaluator;
@@ -1999,11 +2000,58 @@ public class LivePlayActivity extends BaseActivity {
             } else {
                 hideSwitchChannelSnapshot();
             }
+            // === 直播播放入口：识别 scheme、清洗前缀、分发到对应线路 ===
             String liveUrl = currentLiveChannelItem.getUrl();
+            String pureUrl = liveUrl;
+            boolean useWebViewSniff = false;   // 线路2：webview:// 网页容器嗅探
+            boolean useVideoSniff = false;     // 线路3：video:// 嗅探（先判断是否直接视频，否则降级走 WebView）
+
             if (liveUrl != null && liveUrl.startsWith("webview://")) {
+                // 【webview://嗅探】去掉 scheme 前缀，还原 item.url 避免污染后续换源
+                pureUrl = liveUrl.substring(10);
+                currentLiveChannelItem.setUrl(pureUrl);
+                useWebViewSniff = true;
+            } else if (liveUrl != null && liveUrl.startsWith("video://")) {
+                // 【video://嗅探】去掉 scheme 前缀，先判断 url 本身是不是直连视频流
+                pureUrl = liveUrl.substring(8);
+                currentLiveChannelItem.setUrl(pureUrl);
+                useVideoSniff = true;
+            }
+
+            if (useWebViewSniff) {
+                // 线路2：直接打开内置 WebView 全屏容器嗅探 → 请求拦截 → VideoParseRuler 识别视频流 → 切 VideoView
+                LOG.i("🎬 直播线路：webview://网页嗅探 → " + pureUrl);
                 showWebViewPlayer();
-                loadWebViewUrl(liveUrl.substring(10));
+                loadWebViewUrl(pureUrl);
+
+            } else if (useVideoSniff) {
+                // 线路3：video://嗅探 —— 先用 VideoParseRuler 判断该 url 本身是否就是可直连的视频流
+                // 是视频 → 直连播；不是视频（如需要进一步嗅探的页面/接口）→ 降级走 WebView 嗅探容器
+                boolean isDirectVideo = pureUrl != null &&
+                        com.github.tvbox.osc.util.VideoParseRuler.checkIsVideoForParse(pureUrl, pureUrl);
+                LOG.i("🎬 直播线路：video://嗅探 → " + pureUrl + " isDirectVideo=" + isDirectVideo);
+                if (isDirectVideo) {
+                    hideWebViewPlayer();
+                    if (mLiveWebView != null) {
+                        mLiveWebView.stopLoading();
+                        mLiveWebView.loadUrl("about:blank");
+                    }
+                    if (reusePlayer) {
+                        mVideoView.setUrl(pureUrl, liveChannelHeader());
+                        mVideoView.replay(true);
+                    } else {
+                        mVideoView.release();
+                        mVideoView.setUrl(pureUrl, liveChannelHeader());
+                        mVideoView.start();
+                    }
+                } else {
+                    // 降级：用 WebView 容器嗅探
+                    showWebViewPlayer();
+                    loadWebViewUrl(pureUrl);
+                }
+
             } else {
+                // 线路1：直连（无前缀 / http(s)://） —— 原有逻辑完整保留
                 hideWebViewPlayer();
                 if (mLiveWebView != null) {
                     mLiveWebView.stopLoading();
@@ -2664,7 +2712,61 @@ public class LivePlayActivity extends BaseActivity {
             mHandler.removeCallbacks(mHideChannelListRun);
             mHandler.postDelayed(mHideChannelListRun, postTimeout);
         }
-        playChannel(liveChannelGroupAdapter.getSelectedGroupIndex(), position, false);
+        // 弹线路选择对话框：【直连播放】【video://嗅探】【webview://网页容器播放】
+        // 仅用户主动点击换台时弹；EPG回看、自动重试、超时换源等全部绕过弹窗，走 playChannel 原逻辑
+        int groupIndex = liveChannelGroupAdapter.getSelectedGroupIndex();
+        ArrayList<LiveChannelItem> channels = getLiveChannels(groupIndex);
+        if (channels == null || position < 0 || position >= channels.size()) {
+            playChannel(groupIndex, position, false);
+            return;
+        }
+        LiveChannelItem targetItem = channels.get(position);
+        showLivePlayLineDialog(groupIndex, position, targetItem);
+    }
+
+    /**
+     * 直播播放线路三选一对话框
+     * 选项：1-直连播放（原逻辑）、2-video://嗅探、3-webview://网页容器播放
+     * 选中后临时给目标 LiveChannelItem.url 加上对应 scheme 前缀，再调用 playChannel；
+     * playChannel 内部会识别 scheme → 分发 → 清洗前缀还原 item.url，保证不污染后续换源。
+     */
+    private void showLivePlayLineDialog(final int groupIndex, final int position, final LiveChannelItem targetItem) {
+        if (targetItem == null) {
+            playChannel(groupIndex, position, false);
+            return;
+        }
+        final String originalUrl = targetItem.getUrl();
+        final String[] lineOptions = new String[]{
+                "① 直连播放（原始逻辑，直接丢给内置播放器）",
+                "② video:// 嗅探（解析后交给播放器）",
+                "③ webview:// 网页容器播放（App 内 WebView 全屏页面）"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("选择播放线路")
+                .setItems(lineOptions, (dialog, which) -> {
+                    String schemePrefix;
+                    switch (which) {
+                        case 1: // video:// 嗅探
+                            schemePrefix = "video://";
+                            break;
+                        case 2: // webview:// 网页容器
+                            schemePrefix = "webview://";
+                            break;
+                        case 0: // 直连：不加前缀，原逻辑
+                        default:
+                            schemePrefix = "";
+                            break;
+                    }
+                    // 临时给目标 item 的 url 加 scheme 前缀，playChannel 内部会识别后清洗回原值
+                    if (!TextUtils.isEmpty(schemePrefix) && originalUrl != null && !originalUrl.startsWith("http")) {
+                        LOG.w("🎬 目标 url 非 http 开头：" + originalUrl + "，退化为直连");
+                        schemePrefix = "";
+                    }
+                    targetItem.setUrl(schemePrefix + (originalUrl == null ? "" : originalUrl));
+                    playChannel(groupIndex, position, false);
+                })
+                .setNegativeButton("取消", (dialog, which) -> dialog.dismiss())
+                .show();
     }
 
     private void initSettingGroupView() {
