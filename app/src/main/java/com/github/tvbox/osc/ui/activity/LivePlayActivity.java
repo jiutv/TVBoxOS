@@ -1419,64 +1419,70 @@ public class LivePlayActivity extends BaseActivity {
             cm.setAcceptThirdPartyCookies(mLiveWebView, true);
         }
         mLiveWebView.setWebChromeClient(new WebChromeClient() {
-            // 用于承接网页里 video.requestFullscreen() 触发的全屏
             private View mCustomView;
             private CustomViewCallback mCustomViewCallback;
 
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
-                // 网页内 video 触发全屏 → 把全屏视图盖到 mWebViewContainer 上
-                if (mCustomView != null) {
-                    callback.onCustomViewHidden();
-                    return;
-                }
-                mCustomView = view;
-                mCustomViewCallback = callback;
-                if (mWebViewContainer != null) {
-                    android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
-                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT);
-                    mWebViewContainer.addView(view, lp);
+                try {
+                    if (mCustomView != null) {
+                        callback.onCustomViewHidden();
+                        return;
+                    }
+                    mCustomView = view;
+                    mCustomViewCallback = callback;
+                    if (mWebViewContainer != null) {
+                        android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
+                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                android.widget.FrameLayout.LayoutParams.MATCH_PARENT);
+                        mWebViewContainer.addView(view, lp);
+                    }
+                } catch (Throwable t) {
+                    LOG.i("WebChromeClient.onShowCustomView crash: " + t);
                 }
             }
 
             @Override
             public void onHideCustomView() {
-                // 网页退出全屏 → 移除全屏视图
-                if (mCustomView == null) return;
-                if (mWebViewContainer != null) {
-                    mWebViewContainer.removeView(mCustomView);
-                }
-                mCustomView = null;
-                if (mCustomViewCallback != null) {
-                    mCustomViewCallback.onCustomViewHidden();
-                    mCustomViewCallback = null;
+                try {
+                    if (mCustomView == null) return;
+                    if (mWebViewContainer != null) {
+                        mWebViewContainer.removeView(mCustomView);
+                    }
+                    mCustomView = null;
+                    if (mCustomViewCallback != null) {
+                        mCustomViewCallback.onCustomViewHidden();
+                        mCustomViewCallback = null;
+                    }
+                } catch (Throwable t) {
+                    LOG.i("WebChromeClient.onHideCustomView crash: " + t);
                 }
             }
 
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
                 super.onProgressChanged(view, newProgress);
-                // 浏览模式：进度 100% 后用 JS 强制自动播放 + 请求全屏
-                // 嗅探模式不要自动播，等抓到流后切 VideoView
-                if (newProgress >= 100 && !mWebViewSniffMode && mLiveWebView != null) {
-                    String autoPlayJs =
-                            "(function(){" +
-                            "  var videos = document.querySelectorAll('video');" +
-                            "  for (var i = 0; i < videos.length; i++) {" +
-                            "    try { videos[i].muted = false; } catch(e){}" +
-                            "    try { videos[i].play(); } catch(e){}" +
-                            "    try { videos[i].play().catch(function(){}); } catch(e){}" +
-                            "    try { videos[i].requestFullscreen(); } catch(e){}" +
-                            "    try { videos[i].webkitRequestFullscreen(); } catch(e){}" +
-                            "  }" +
-                            "  // YouTube/央视频 这类播放器用 iframe 或自定义控件，也尝试点一下播放按钮" +
-                            "  var btns = document.querySelectorAll('button, [class*=play], [class*=Play]');" +
-                            "  for (var j = 0; j < Math.min(btns.length, 5); j++) {" +
-                            "    try { btns[j].click(); } catch(e){}" +
-                            "  }" +
-                            "})();";
-                    mLiveWebView.evaluateJavascript(autoPlayJs, null);
+                try {
+                    if (newProgress >= 100 && !mWebViewSniffMode && mLiveWebView != null) {
+                        String autoPlayJs =
+                                "(function(){" +
+                                "  var videos = document.querySelectorAll('video');" +
+                                "  for (var i = 0; i < videos.length; i++) {" +
+                                "    try { videos[i].muted = false; } catch(e){}" +
+                                "    try { videos[i].play(); } catch(e){}" +
+                                "    try { videos[i].play().catch(function(){}); } catch(e){}" +
+                                "    try { videos[i].requestFullscreen(); } catch(e){}" +
+                                "    try { videos[i].webkitRequestFullscreen(); } catch(e){}" +
+                                "  }" +
+                                "  var btns = document.querySelectorAll('button, [class*=play], [class*=Play]');" +
+                                "  for (var j = 0; j < Math.min(btns.length, 5); j++) {" +
+                                "    try { btns[j].click(); } catch(e){}" +
+                                "  }" +
+                                "})();";
+                        mLiveWebView.evaluateJavascript(autoPlayJs, null);
+                    }
+                } catch (Throwable t) {
+                    LOG.i("WebChromeClient.onProgressChanged crash: " + t);
                 }
             }
         });
@@ -1513,42 +1519,49 @@ public class LivePlayActivity extends BaseActivity {
 
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                // 浏览模式（webview://）：不劫持任何资源，HTML5 video 在 WebView 里直接播
-                // 嗅探模式（webview-sniff://）：拦截资源 → checkIsVideo 识别视频流 → 切 VideoView
-                if (!mWebViewSniffMode) return null;
-                String url = request.getUrl().toString();
-                if (!url.startsWith("http")) return null;
-                HashMap<String, String> webHeaders = new HashMap<>();
-                Map<String, String> hds = request.getRequestHeaders();
-                if (hds != null) {
-                    for (String k : hds.keySet()) {
-                        if (k.equalsIgnoreCase("user-agent") || k.equalsIgnoreCase("referer") || k.equalsIgnoreCase("origin")) {
-                            webHeaders.put(k, " " + hds.get(k));
+                try {
+                    if (!mWebViewSniffMode) return null;
+                    String url = request.getUrl().toString();
+                    if (!url.startsWith("http")) return null;
+                    HashMap<String, String> webHeaders = new HashMap<>();
+                    Map<String, String> hds = request.getRequestHeaders();
+                    if (hds != null) {
+                        for (String k : hds.keySet()) {
+                            if (k.equalsIgnoreCase("user-agent") || k.equalsIgnoreCase("referer") || k.equalsIgnoreCase("origin")) {
+                                webHeaders.put(k, " " + hds.get(k));
+                            }
                         }
                     }
+                    return checkIsVideo(url, webHeaders);
+                } catch (Throwable t) {
+                    LOG.i("WebViewClient.shouldInterceptRequest crash: " + t);
+                    return null;
                 }
-                return checkIsVideo(url, webHeaders);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                // 浏览模式：页面渲染完成后再次尝试 JS 自动播放（兜底）
-                if (!mWebViewSniffMode) {
-                    // 延迟 1.5s 让 video 元素完全初始化后再注入
-                    mHandler.postDelayed(() -> {
-                        if (mLiveWebView != null && !mWebViewSniffMode) {
-                            String autoPlayJs =
-                                    "(function(){" +
-                                    "  var videos = document.querySelectorAll('video');" +
-                                    "  for (var i = 0; i < videos.length; i++) {" +
-                                    "    try { videos[i].play(); } catch(e){}" +
-                                    "    try { videos[i].requestFullscreen(); } catch(e){}" +
-                                    "  }" +
-                                    "})();";
-                            mLiveWebView.evaluateJavascript(autoPlayJs, null);
-                        }
-                    }, 1500);
+                try {
+                    if (!mWebViewSniffMode) {
+                        mHandler.postDelayed(() -> {
+                            try {
+                                if (mLiveWebView != null && !mWebViewSniffMode) {
+                                    String autoPlayJs =
+                                            "(function(){" +
+                                            "  var videos = document.querySelectorAll('video');" +
+                                            "  for (var i = 0; i < videos.length; i++) {" +
+                                            "    try { videos[i].play(); } catch(e){}" +
+                                            "    try { videos[i].requestFullscreen(); } catch(e){}" +
+                                            "  }" +
+                                            "})();";
+                                    mLiveWebView.evaluateJavascript(autoPlayJs, null);
+                                }
+                            } catch (Throwable ignored) {}
+                        }, 1500);
+                    }
+                } catch (Throwable t) {
+                    LOG.i("WebViewClient.onPageFinished crash: " + t);
                 }
             }
         });
@@ -2138,11 +2151,13 @@ public class LivePlayActivity extends BaseActivity {
                 }
             }
 
-            hideWebViewPlayer();
-            if (mLiveWebView != null) {
-                mLiveWebView.stopLoading();
-                mLiveWebView.loadUrl("about:blank");
-            }
+            try {
+                hideWebViewPlayer();
+                if (mLiveWebView != null) {
+                    mLiveWebView.stopLoading();
+                    mLiveWebView.loadUrl("about:blank");
+                }
+            } catch (Throwable ignored) {}
 
             if ("webview".equals(dispatchTag)) {
                 // ==== webview://（对标 NewBox）====
