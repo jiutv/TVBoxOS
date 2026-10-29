@@ -110,6 +110,11 @@ public class FullWebActivity extends BaseActivity {
         return com.github.tvbox.osc.R.layout.activity_full_web;
     }
 
+    // BaseActivity 抽象方法钩子：这里无需额外初始化，所有准备工作在 onCreate 里做
+    @Override
+    protected void init() {
+    }
+
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -130,7 +135,7 @@ public class FullWebActivity extends BaseActivity {
         mSniffMode = MODE_SNIFF.equals(mode);
 
         if (TextUtils.isEmpty(mEntryUrl)) {
-            LOG.w("🎬 FullWebActivity 未收到 url，关闭");
+            LOG.i("🎬 FullWebActivity 未收到 url，关闭");
             finish();
             return;
         }

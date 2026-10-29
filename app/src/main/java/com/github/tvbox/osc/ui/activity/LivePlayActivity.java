@@ -2805,7 +2805,7 @@ public class LivePlayActivity extends BaseActivity {
                     }
                     // 临时给目标 item 的 url 加 scheme 前缀，playChannel 内部会识别后清洗回原值
                     if (!TextUtils.isEmpty(schemePrefix) && originalUrl != null && !originalUrl.startsWith("http")) {
-                        LOG.w("🎬 目标 url 非 http 开头：" + originalUrl + "，退化为直连");
+                        LOG.i("🎬 目标 url 非 http 开头：" + originalUrl + "，退化为直连");
                         schemePrefix = "";
                     }
                     targetItem.setUrl(schemePrefix + (originalUrl == null ? "" : originalUrl));
