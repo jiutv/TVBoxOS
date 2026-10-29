@@ -48,6 +48,14 @@
         <activity
             android:name=".ui.activity.LivePlayActivity"
             android:screenOrientation="sensorLandscape" />
+        <!-- FullWebActivity: 对标 NewBox webview:// / webview-sniff:// 协议的全屏 WebView 容器 -->
+        <activity
+            android:name=".ui.activity.FullWebActivity"
+            android:configChanges="orientation|keyboardHidden|screenSize"
+            android:exported="false"
+            android:screensaver="false"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/AppTheme.NoActionBar" />
         <activity
             android:name=".ui.activity.DetailActivity"
             android:configChanges="orientation|screenSize"
