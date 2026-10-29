@@ -2108,7 +2108,7 @@ public class LivePlayActivity extends BaseActivity {
             //   http(s):// / 无前缀  → 直连（原有逻辑 100% 保留）
             String liveUrl = currentLiveChannelItem.getUrl();
             String pureUrl = liveUrl;
-            String dispatchTag = null;   // null=直连 | "webview"=浏览 | "webview-sniff"=嗅探 | "video"=嗅探
+            String dispatchTag = null;   // null=直连 | "webview"=嗅探 | "webview-sniff"=嗅探 | "video"=嗅探
 
             // 统一清洗 scheme 前缀：先长后短匹配，兼容 // : 空 三种写法
             if (liveUrl != null) {
@@ -2145,14 +2145,15 @@ public class LivePlayActivity extends BaseActivity {
             }
 
             if ("webview".equals(dispatchTag)) {
-                // ==== 线路3：webview:// 浏览（内联 WebView，不拦截资源，HTML5 video 直接播）====
-                // NewBox 风格：全部在同一个 LivePlayActivity 里，底部信息栏 + 左侧频道列表照常显示
-                LOG.i("🎬 直播线路：webview://浏览 → " + pureUrl);
+                // ==== webview://（对标 NewBox）====
+                // 后台隐藏 WebView 加载 → shouldInterceptRequest 嗅探直链 → 抓到立即切 VideoView 原生播
+                // 嗅探失败则留在 WebView（showWebViewPlayer 已调用，页面兜底播）
+                LOG.i("🎬 直播线路：webview://嗅探（NewBox 风格） → " + pureUrl);
                 showWebViewPlayer();
-                loadWebViewUrl(pureUrl, false);
+                loadWebViewUrl(pureUrl, true);
 
             } else if ("webview-sniff".equals(dispatchTag)) {
-                // ==== 线路4：webview-sniff:// 嗅探（内联 WebView + shouldInterceptRequest 嗅探 → 切 VideoView）====
+                // ==== webview-sniff://（同上，保留独立协议兼容配置）====
                 LOG.i("🎬 直播线路：webview-sniff://嗅探 → " + pureUrl);
                 showWebViewPlayer();
                 loadWebViewUrl(pureUrl, true);
@@ -2861,8 +2862,8 @@ public class LivePlayActivity extends BaseActivity {
      * 选项：
      *   ① 直连播放        —— 原逻辑，直接丢给内置播放器
      *   ② video:// 嗅探    —— 拼接 video:// 前缀，走 VideoParseRuler / 内联嗅探
-     *   ③ webview:// 网页浏览   —— 拼接 webview://，内联 WebView 浏览模式（网页内播，不劫持资源）
-     *   ④ webview-sniff:// 网页嗅探 —— 拼接 webview-sniff://，内联 WebView 嗅探模式，抓到流回传原生播
+     *   ③ webview:// 网页嗅探   —— 拼接 webview://，后台隐藏 WebView 嗅探直链 → 切原生播（NewBox 风格）
+     *   ④ webview-sniff:// 网页嗅探 —— 同上（保留独立协议兼容配置）
      *
      * 选中后临时给目标 LiveChannelItem.url 加 scheme 前缀 → playChannel 内部识别分发 → 清洗前缀还原 item.url
      * 保证不污染后续换源。同时 config 文件直接写 webview://https://xxx 也能被 playChannel 直接识别。
@@ -2876,8 +2877,8 @@ public class LivePlayActivity extends BaseActivity {
         final String[] lineOptions = new String[]{
                 "① 直连播放（原逻辑，直接丢给内置播放器）",
                 "② video:// 嗅探（解析后交给播放器）",
-                "③ webview:// 网页浏览（App 内 WebView 全屏页面）",
-                "④ webview-sniff:// 网页嗅探（拦截抓流 → 切原生播放器）"
+                "③ webview:// 网页嗅探（隐藏 WebView 抓流 → 切原生播，NewBox 风格）",
+                "④ webview-sniff:// 网页嗅探（同上，独立协议）"
         };
         new AlertDialog.Builder(this)
                 .setTitle("选择播放线路")
