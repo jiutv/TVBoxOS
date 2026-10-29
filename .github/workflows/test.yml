@@ -319,6 +319,15 @@ jobs:
           echo "=== 检查 gh CLI ==="
           gh --version
           echo ""
+          echo "=== 检查 Release ${{ env.tag }} 是否已存在 ==="
+          if gh release view "${{ env.tag }}" >/dev/null 2>&1; then
+            echo "⚠️  Release ${{ env.tag }} 已存在，先删除旧 Release 再重建..."
+            gh release delete "${{ env.tag }}" --yes
+            echo "✅ 旧 Release 已删除"
+          else
+            echo "ℹ️  Release ${{ env.tag }} 不存在，直接创建"
+          fi
+          echo ""
           echo "=== 创建 Release ${{ env.tag }} ==="
           gh release create "${{ env.tag }}" \
             TVBoxOSC/apk/*.apk \
