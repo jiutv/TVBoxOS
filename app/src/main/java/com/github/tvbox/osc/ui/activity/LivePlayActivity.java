@@ -10,7 +10,6 @@ import android.animation.IntEvaluator;
 import android.animation.ObjectAnimator;
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.CountDownTimer;
@@ -132,14 +131,15 @@ import xyz.doikki.videoplayer.player.VideoView;
  * @description:
  */
 public class LivePlayActivity extends BaseActivity {
-    // FullWebActivity 嗅探结果回传的 onActivityResult request code
-    private static final int REQUEST_FULL_WEB_SNIFF = 10001;
-
     public static Context context;
     private VideoView<xyz.doikki.videoplayer.player.AbstractPlayer> mVideoView;
     private FrameLayout mWebViewContainer;
     private WebView mLiveWebView;
     private boolean isWebViewPlaying = false;
+    // webview:// 浏览模式=false | webview-sniff:// 嗅探模式=true
+    // 浏览模式：不拦截任何资源，HTML5 video 在 WebView 里直接播（NewBox 风格）
+    // 嗅探模式：shouldInterceptRequest 拦截，抓到流切 VideoView 原生播
+    private boolean mWebViewSniffMode = false;
     private final Map<String, Boolean> loadedUrls = new HashMap<>();
     private final LinkedList<String> loadFoundVideoUrls = new LinkedList<>();
     private final HashMap<String, HashMap<String, String>> loadFoundVideoUrlsHeader = new HashMap<>();
@@ -1452,6 +1452,9 @@ public class LivePlayActivity extends BaseActivity {
 
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                // 浏览模式（webview://）：不劫持任何资源，HTML5 video 在 WebView 里直接播
+                // 嗅探模式（webview-sniff://）：拦截资源 → checkIsVideo 识别视频流 → 切 VideoView
+                if (!mWebViewSniffMode) return null;
                 String url = request.getUrl().toString();
                 if (!url.startsWith("http")) return null;
                 HashMap<String, String> webHeaders = new HashMap<>();
@@ -1475,9 +1478,19 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     private void loadWebViewUrl(String url) {
+        loadWebViewUrl(url, false);
+    }
+
+    /**
+     * 加载内联 mLiveWebView
+     * @param url   页面 URL（已去掉 scheme 前缀）
+     * @param sniff true=嗅探模式（拦截资源 → 切 VideoView），false=浏览模式（HTML5 video 直接播）
+     */
+    private void loadWebViewUrl(String url, boolean sniff) {
         if (mLiveWebView == null) {
             initLiveWebView();
         }
+        mWebViewSniffMode = sniff;
         loadedUrls.clear();
         loadFoundVideoUrls.clear();
         loadFoundVideoUrlsHeader.clear();
@@ -1487,7 +1500,7 @@ public class LivePlayActivity extends BaseActivity {
             android.webkit.CookieManager.getInstance().removeAllCookies(null);
         } catch (Exception ignored) {
         }
-        LOG.i("LiveWebView loading: " + url);
+        LOG.i("LiveWebView loading: " + url + " sniff=" + sniff);
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(url);
     }
@@ -2005,14 +2018,14 @@ public class LivePlayActivity extends BaseActivity {
                 hideSwitchChannelSnapshot();
             }
             // === 直播播放入口：识别 scheme → 清洗前缀 → 分发到对应线路 ===
-            // 协议（对标 NewBox，兼容双斜杠 / 单斜杠 / 无斜杠三种写法）：
-            //   webview://xxx  / webview:xxx         → FullWebActivity 浏览模式（网页内播，不劫持）
-            //   webview-sniff://xxx / webview-sniff:xxx → FullWebActivity 嗅探模式（拦截抓流）
-            //   video://xxx  / video:xxx              → VideoParseRuler 判直连 / 降级嗅探
-            //   http(s):// / 无前缀                     → 直连（原有逻辑 100% 保留）
+            // NewBox 风格：全部内联在 LivePlayActivity，不跳独立 Activity
+            //   webview://xxx         → 内联 WebView 浏览模式（不劫持资源，HTML5 video 直接播）
+            //   webview-sniff://xxx  → 内联 WebView 嗅探模式（拦截抓流 → 切 VideoView 原生播）
+            //   video://xxx           → VideoParseRuler 判直连 / 降级嗅探（保留原有机制）
+            //   http(s):// / 无前缀  → 直连（原有逻辑 100% 保留）
             String liveUrl = currentLiveChannelItem.getUrl();
             String pureUrl = liveUrl;
-            String dispatchTag = null;   // null=直连 | "webview"=浏览 | "webview-sniff"=嗅探 | "video"=嗅探内联
+            String dispatchTag = null;   // null=直连 | "webview"=浏览 | "webview-sniff"=嗅探 | "video"=嗅探
 
             // 统一清洗 scheme 前缀：先长后短匹配，兼容 // : 空 三种写法
             if (liveUrl != null) {
@@ -2036,54 +2049,37 @@ public class LivePlayActivity extends BaseActivity {
                     pureUrl = liveUrl.substring(6);
                     dispatchTag = "video";
                 }
-                // 只要命中了 scheme 前缀，就清洗掉并还原 item.url，避免污染后续换源
+                // 命中 scheme → 清洗掉并还原 item.url，避免污染后续换源
                 if (dispatchTag != null) {
                     currentLiveChannelItem.setUrl(pureUrl);
                 }
             }
 
+            hideWebViewPlayer();
+            if (mLiveWebView != null) {
+                mLiveWebView.stopLoading();
+                mLiveWebView.loadUrl("about:blank");
+            }
+
             if ("webview".equals(dispatchTag)) {
-                // ==== 线路3：webview:// 网页浏览（FullWebActivity BROWSE 模式）====
-                // 停止当前播放，释放 VideoView，启动全屏 WebView Activity
-                LOG.i("🎬 直播线路：webview://网页浏览 → " + pureUrl);
-                hideWebViewPlayer();
-                if (mVideoView != null) mVideoView.release();
-                if (mLiveWebView != null) {
-                    mLiveWebView.stopLoading();
-                    mLiveWebView.loadUrl("about:blank");
-                }
-                Intent browseIntent = new Intent(this, FullWebActivity.class);
-                browseIntent.putExtra(FullWebActivity.EXTRA_URL, pureUrl);
-                startActivity(browseIntent);
+                // ==== 线路3：webview:// 浏览（内联 WebView，不拦截资源，HTML5 video 直接播）====
+                // NewBox 风格：全部在同一个 LivePlayActivity 里，底部信息栏 + 左侧频道列表照常显示
+                LOG.i("🎬 直播线路：webview://浏览 → " + pureUrl);
+                showWebViewPlayer();
+                loadWebViewUrl(pureUrl, false);
 
             } else if ("webview-sniff".equals(dispatchTag)) {
-                // ==== 线路4：webview-sniff:// 网页嗅探（FullWebActivity SNIFF 模式）====
-                // FullWebActivity 嗅探命中后 setResult 回传，onActivityResult 里切 VideoView 原生播
-                LOG.i("🎬 直播线路：webview-sniff://网页嗅探 → " + pureUrl);
-                hideWebViewPlayer();
-                if (mVideoView != null) mVideoView.release();
-                if (mLiveWebView != null) {
-                    mLiveWebView.stopLoading();
-                    mLiveWebView.loadUrl("about:blank");
-                }
-                Intent sniffIntent = new Intent(this, FullWebActivity.class);
-                sniffIntent.putExtra(FullWebActivity.EXTRA_URL, pureUrl);
-                sniffIntent.putExtra(FullWebActivity.EXTRA_MODE, FullWebActivity.MODE_SNIFF);
-                startActivityForResult(sniffIntent, REQUEST_FULL_WEB_SNIFF);
+                // ==== 线路4：webview-sniff:// 嗅探（内联 WebView + shouldInterceptRequest 嗅探 → 切 VideoView）====
+                LOG.i("🎬 直播线路：webview-sniff://嗅探 → " + pureUrl);
+                showWebViewPlayer();
+                loadWebViewUrl(pureUrl, true);
 
             } else if ("video".equals(dispatchTag)) {
-                // ==== 线路2：video:// 嗅探（保留上轮实现）====
-                // VideoParseRuler 先判断 url 本身是不是直连视频流
-                // 是 → 直连播；不是（需要进一步嗅探的页面/接口）→ 降级走内联 mLiveWebView 嗅探
+                // ==== 线路2：video:// 嗅探（保留原有机制）====
                 boolean isDirectVideo = pureUrl != null &&
                         com.github.tvbox.osc.util.VideoParseRuler.checkIsVideoForParse(pureUrl, pureUrl);
                 LOG.i("🎬 直播线路：video://嗅探 → " + pureUrl + " isDirectVideo=" + isDirectVideo);
                 if (isDirectVideo) {
-                    hideWebViewPlayer();
-                    if (mLiveWebView != null) {
-                        mLiveWebView.stopLoading();
-                        mLiveWebView.loadUrl("about:blank");
-                    }
                     if (reusePlayer) {
                         mVideoView.setUrl(pureUrl, liveChannelHeader());
                         mVideoView.replay(true);
@@ -2093,18 +2089,13 @@ public class LivePlayActivity extends BaseActivity {
                         mVideoView.start();
                     }
                 } else {
-                    // 降级：用内联 mLiveWebView 嗅探容器（项目原有机制）
+                    // 降级：内联 WebView 嗅探
                     showWebViewPlayer();
-                    loadWebViewUrl(pureUrl);
+                    loadWebViewUrl(pureUrl, true);
                 }
 
             } else {
                 // ==== 线路1：直连（无前缀 / http(s)://） —— 原有逻辑完整保留 ====
-                hideWebViewPlayer();
-                if (mLiveWebView != null) {
-                    mLiveWebView.stopLoading();
-                    mLiveWebView.loadUrl("about:blank");
-                }
                 if (reusePlayer) {
                     mVideoView.setUrl(liveUrl, liveChannelHeader());
                     mVideoView.replay(true);
@@ -2787,8 +2778,8 @@ public class LivePlayActivity extends BaseActivity {
      * 选项：
      *   ① 直连播放        —— 原逻辑，直接丢给内置播放器
      *   ② video:// 嗅探    —— 拼接 video:// 前缀，走 VideoParseRuler / 内联嗅探
-     *   ③ webview:// 网页浏览   —— 拼接 webview://，启动 FullWebActivity 浏览模式（网页内播，不劫持资源）
-     *   ④ webview-sniff:// 网页嗅探 —— 拼接 webview-sniff://，启动 FullWebActivity 嗅探模式，抓到流回传原生播
+     *   ③ webview:// 网页浏览   —— 拼接 webview://，内联 WebView 浏览模式（网页内播，不劫持资源）
+     *   ④ webview-sniff:// 网页嗅探 —— 拼接 webview-sniff://，内联 WebView 嗅探模式，抓到流回传原生播
      *
      * 选中后临时给目标 LiveChannelItem.url 加 scheme 前缀 → playChannel 内部识别分发 → 清洗前缀还原 item.url
      * 保证不污染后续换源。同时 config 文件直接写 webview://https://xxx 也能被 playChannel 直接识别。
@@ -2813,10 +2804,10 @@ public class LivePlayActivity extends BaseActivity {
                         case 1: // video:// 嗅探
                             schemePrefix = "video://";
                             break;
-                        case 2: // webview:// 浏览（FullWebActivity BROWSE）
+                        case 2: // webview:// 浏览（内联 WebView BROWSE）
                             schemePrefix = "webview://";
                             break;
-                        case 3: // webview-sniff:// 嗅探（FullWebActivity SNIFF）
+                        case 3: // webview-sniff:// 嗅探（内联 WebView SNIFF）
                             schemePrefix = "webview-sniff://";
                             break;
                         case 0: // 直连：不加前缀，原逻辑
@@ -2834,30 +2825,6 @@ public class LivePlayActivity extends BaseActivity {
                 })
                 .setNegativeButton("取消", (dialog, which) -> dialog.dismiss())
                 .show();
-    }
-
-    /**
-     * 接收 FullWebActivity 嗅探结果
-     * - FullWebActivity(SNIFF) shouldInterceptRequest 抓到流 → setResult(RESULT_OK, streamUrl + headers) + finish()
-     * - 这里取回 url + headers，切回 VideoView 原生播放
-     * - 嗅探失败（没抓到流 / 用户按 back）→ RESULT_CANCELED → 留在 LivePlayActivity（VideoView 空闲态）
-     */
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQUEST_FULL_WEB_SNIFF && resultCode == RESULT_OK && data != null) {
-            String streamUrl = data.getStringExtra(FullWebActivity.RESULT_STREAM_URL);
-            String headersStr = data.getStringExtra(FullWebActivity.RESULT_STREAM_HEADERS);
-            if (TextUtils.isEmpty(streamUrl)) return;
-            LOG.i("🎬 收到 FullWebActivity 嗅探结果：" + streamUrl);
-            HashMap<String, String> sniffHeaders = FullWebActivity.decodeHeaders(headersStr);
-            HashMap<String, String> finalHeader = liveChannelHeader();
-            if (sniffHeaders != null) finalHeader.putAll(sniffHeaders);
-            // 切回原生播放器播嗅探到的流
-            mVideoView.setUrl(streamUrl, finalHeader);
-            mVideoView.start();
-            showResolutionAfterChannelSwitch();
-        }
     }
 
     private void initSettingGroupView() {
