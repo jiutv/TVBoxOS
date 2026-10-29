@@ -2377,37 +2377,8 @@ public class LivePlayActivity extends BaseActivity {
                 }
             }
 
-            // === 无前缀 http(s):// → 自动识别该用什么播放方式 ===
-            // 不修改 targetItem.url，只临时赋值 dispatchTag，后面分发逻辑统一走 pureUrl
-            if (dispatchTag == null && pureUrl != null) {
-                try {
-                    String lu = pureUrl.toLowerCase();
-                    // 后缀是视频格式 / 已知格式 → 直连（最快最稳，dispatchTag 保持 null）
-                    if (DefaultConfig.isVideoFormat(pureUrl)
-                            || lu.endsWith(".m3u8") || lu.endsWith(".mp4") || lu.endsWith(".mpd")
-                            || lu.endsWith(".flv") || lu.endsWith(".ts") || lu.endsWith(".mkv")
-                            || lu.endsWith(".m4v") || lu.endsWith(".mpg") || lu.endsWith(".webm")) {
-                        LOG.i("🎯 自动识别 → 直连 VideoView: " + pureUrl);
-                    }
-                    // 网页后缀 / 直播页面关键词 → webview:// 嗅探（NewBox 风格）
-                    else if (lu.endsWith(".html") || lu.endsWith(".htm") || lu.endsWith(".php")
-                            || lu.endsWith(".jsp") || lu.endsWith(".asp") || lu.endsWith(".aspx")
-                            || lu.endsWith(".shtml") || lu.endsWith(".do")
-                            || (lu.contains("live") && (lu.contains("play") || lu.contains("stream") || lu.contains("channel")))
-                            || lu.contains("liveplay") || lu.contains("/live/") || lu.contains("live.channel")
-                            || lu.contains("iptv") || lu.contains("broadcast") || lu.contains("station")) {
-                        LOG.i("🎯 自动识别为网页直播 → webview:// 嗅探: " + pureUrl);
-                        dispatchTag = "webview";
-                    }
-                    // 其他复杂格式 → video:// 嗅探（兼容旧逻辑）
-                    else {
-                        LOG.i("🎯 自动识别 → video:// 嗅探: " + pureUrl);
-                        dispatchTag = "video";
-                    }
-                } catch (Throwable t) {
-                    LOG.i("自动识别 crash: " + t);
-                }
-            }
+            // === 无前缀 http(s):// → 直连 VideoView（尊重源的原始意图，NewBox 风格）===
+            // NewBox 原则：源里写 webview:// 就嗅探，源里写 m3u8 就直连，源不写就默认直连
 
             try {
                 hideWebViewPlayer();
