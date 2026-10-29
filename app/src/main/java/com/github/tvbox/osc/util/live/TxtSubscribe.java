@@ -364,7 +364,11 @@ public class TxtSubscribe {
     }
 
     private static boolean isUrl(String url) {
-        return !url.isEmpty() && (url.startsWith("http") || url.startsWith("rtp") || url.startsWith("rtsp") || url.startsWith("rtmp"));
+        // 增加 webview://、webview-sniff://、video:// 自定义 scheme 识别
+        return !url.isEmpty()
+                && (url.startsWith("http")
+                    || url.startsWith("rtp") || url.startsWith("rtsp") || url.startsWith("rtmp")
+                    || url.startsWith("webview:") || url.startsWith("webview-sniff:") || url.startsWith("video:"));
     }
 
     private static String get(String line, Pattern pattern) {

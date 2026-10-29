@@ -2005,30 +2005,41 @@ public class LivePlayActivity extends BaseActivity {
                 hideSwitchChannelSnapshot();
             }
             // === 直播播放入口：识别 scheme → 清洗前缀 → 分发到对应线路 ===
-            // 协议（对标 NewBox）：
-            //   webview://xxx         → 全屏 WebActivity 浏览模式（网页内播，不劫持）
-            //   webview-sniff://xxx  → 全屏 WebActivity 嗅探模式（拦截抓流 → 回传原生播）
-            //   video://xxx           → VideoParseRuler 判直连 / 降级 WebView 嗅探（上轮实现，保留）
-            //   http(s):// / 无前缀  → 直连（原有逻辑 100% 保留）
+            // 协议（对标 NewBox，兼容双斜杠 / 单斜杠 / 无斜杠三种写法）：
+            //   webview://xxx  / webview:xxx         → FullWebActivity 浏览模式（网页内播，不劫持）
+            //   webview-sniff://xxx / webview-sniff:xxx → FullWebActivity 嗅探模式（拦截抓流）
+            //   video://xxx  / video:xxx              → VideoParseRuler 判直连 / 降级嗅探
+            //   http(s):// / 无前缀                     → 直连（原有逻辑 100% 保留）
             String liveUrl = currentLiveChannelItem.getUrl();
             String pureUrl = liveUrl;
-            String dispatchTag = null;   // null=直连 | "webview"=浏览 | "webview-sniff"=嗅探Activity | "video"=嗅探内联
+            String dispatchTag = null;   // null=直连 | "webview"=浏览 | "webview-sniff"=嗅探 | "video"=嗅探内联
 
-            if (liveUrl != null && liveUrl.startsWith("webview-sniff://")) {
-                // 【webview-sniff://嗅探】去掉 scheme，启动 FullWebActivity 嗅探模式
-                pureUrl = liveUrl.substring(16);
-                currentLiveChannelItem.setUrl(pureUrl);
-                dispatchTag = "webview-sniff";
-            } else if (liveUrl != null && liveUrl.startsWith("webview://")) {
-                // 【webview://浏览】去掉 scheme，启动 FullWebActivity 浏览模式（网页内播放视频）
-                pureUrl = liveUrl.substring(10);
-                currentLiveChannelItem.setUrl(pureUrl);
-                dispatchTag = "webview";
-            } else if (liveUrl != null && liveUrl.startsWith("video://")) {
-                // 【video://嗅探】去掉 scheme
-                pureUrl = liveUrl.substring(8);
-                currentLiveChannelItem.setUrl(pureUrl);
-                dispatchTag = "video";
+            // 统一清洗 scheme 前缀：先长后短匹配，兼容 // : 空 三种写法
+            if (liveUrl != null) {
+                String lower = liveUrl.toLowerCase();
+                if (lower.startsWith("webview-sniff://")) {
+                    pureUrl = liveUrl.substring(16);
+                    dispatchTag = "webview-sniff";
+                } else if (lower.startsWith("webview-sniff:")) {
+                    pureUrl = liveUrl.substring(14);
+                    dispatchTag = "webview-sniff";
+                } else if (lower.startsWith("webview://")) {
+                    pureUrl = liveUrl.substring(10);
+                    dispatchTag = "webview";
+                } else if (lower.startsWith("webview:")) {
+                    pureUrl = liveUrl.substring(8);
+                    dispatchTag = "webview";
+                } else if (lower.startsWith("video://")) {
+                    pureUrl = liveUrl.substring(8);
+                    dispatchTag = "video";
+                } else if (lower.startsWith("video:")) {
+                    pureUrl = liveUrl.substring(6);
+                    dispatchTag = "video";
+                }
+                // 只要命中了 scheme 前缀，就清洗掉并还原 item.url，避免污染后续换源
+                if (dispatchTag != null) {
+                    currentLiveChannelItem.setUrl(pureUrl);
+                }
             }
 
             if ("webview".equals(dispatchTag)) {
@@ -2750,7 +2761,8 @@ public class LivePlayActivity extends BaseActivity {
             mHandler.postDelayed(mHideChannelListRun, postTimeout);
         }
         // 弹线路选择对话框：4 选项（对标 NewBox 的 webview:// / webview-sniff:// 协议）
-        // 仅用户主动点击换台时弹；EPG回看、自动重试、超时换源、手动换源按钮等全部绕过弹窗，走 playChannel 原逻辑
+        // 重要：源如果已经带了自定义 scheme（webview:/webview-sniff:/video:），说明配置意图已明确 → 直接分发，不弹窗
+        // 只有无前缀 http(s):// 源才弹，让用户手动选播放方式
         int groupIndex = liveChannelGroupAdapter.getSelectedGroupIndex();
         ArrayList<LiveChannelItem> channels = getLiveChannels(groupIndex);
         if (channels == null || position < 0 || position >= channels.size()) {
@@ -2758,6 +2770,15 @@ public class LivePlayActivity extends BaseActivity {
             return;
         }
         LiveChannelItem targetItem = channels.get(position);
+        String url = targetItem != null ? targetItem.getUrl() : null;
+        // 源已带自定义 scheme → 直接分发，尊重配置意图
+        if (url != null) {
+            String lower = url.toLowerCase();
+            if (lower.startsWith("webview:") || lower.startsWith("webview-sniff:") || lower.startsWith("video:")) {
+                playChannel(groupIndex, position, false);
+                return;
+            }
+        }
         showLivePlayLineDialog(groupIndex, position, targetItem);
     }
 
