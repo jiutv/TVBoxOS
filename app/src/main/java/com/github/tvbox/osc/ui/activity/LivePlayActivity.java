@@ -145,6 +145,7 @@ public class LivePlayActivity extends BaseActivity {
     private final HashMap<String, HashMap<String, String>> loadFoundVideoUrlsHeader = new HashMap<>();
     private final AtomicInteger loadFoundCount = new AtomicInteger(0);
     private String webViewEntryUrl = null;
+    private Runnable mSniffTimeoutRunnable = null;
     private View switchChannelSnapshotOverlay;
     private ImageView switchChannelSnapshotImage;
     private TextView tvChannelInfo;
@@ -1486,35 +1487,98 @@ public class LivePlayActivity extends BaseActivity {
                 }
             }
         });
+        // JS 回传嗅探结果的桥接接口（fetch/XHR/video.src hook 调用）
+        mLiveWebView.addJavascriptInterface(new SniffBridge(), "sniffBridge");
+
         mLiveWebView.setWebViewClient(new WebViewClient() {
+            /**
+             * 宽松视频流判断（多层保障，解决腾讯云等动态加载播放器 URL 无后缀问题）
+             *  层1: 原有 isVideoFormat（正则匹配后缀/格式）
+             *  层2: URL 关键词（m3u8/mpd/mp4/hls/media-stream/dash/video/live/ts/直播流特征）
+             *  层3: 路径特征（/live/ /vod/ /hls/ /stream/ /media/ /manifest/ /playlist/）
+             */
+            private boolean looseIsVideoUrl(String url) {
+                if (url == null || url.length() < 10) return false;
+                try {
+                    // 层1: 原有正则（后缀 + 已知格式）
+                    if (DefaultConfig.isVideoFormat(url)) return true;
+                    // 层2: 关键词（大小写不敏感）
+                    String lower = url.toLowerCase();
+                    if (lower.contains(".m3u8") || lower.contains(".mpd") || lower.contains(".mp4")
+                            || lower.contains(".flv") || lower.contains(".ts") || lower.contains(".mkv")
+                            || lower.contains("manifest.mpd") || lower.contains("playlist.m3u8")
+                            || lower.contains("master.m3u8")
+                            || lower.contains("/hls/") || lower.contains("/dash/")
+                            || lower.contains("media-stream") || lower.contains("media_type=video")
+                            || lower.contains("mime_type=video") || lower.contains("content_type=video")) {
+                        return true;
+                    }
+                    // 层3: 路径/查询参数特征
+                    if ((lower.contains("live") || lower.contains("stream") || lower.contains("vod"))
+                            && (lower.contains("video") || lower.contains("media") || lower.contains("play")
+                                || lower.contains("channel") || lower.contains("cdn")
+                                || lower.contains(".php?") || lower.contains(".json?")
+                                || lower.contains("/api/") || lower.contains("token="))) {
+                        return true;
+                    }
+                } catch (Throwable ignored) {}
+                return false;
+            }
+
+            /** 统一处理抓到的流：去重 + 切 VideoView */
+            private void handleSniffHit(String url, HashMap<String, String> headers) {
+                try {
+                    if (loadFoundCount.get() > 0) return; // 已经抓到过了
+                    if (url == null || url.length() < 10) return;
+                    if (url.contains("favicon.ico") || url.contains(".css") || url.contains(".js")) return;
+                    loadFoundVideoUrls.add(url);
+                    loadFoundVideoUrlsHeader.put(url, headers != null ? headers : new HashMap<>());
+                    LOG.i("🎯 WebView嗅探命中: " + url);
+                    if (loadFoundCount.incrementAndGet() == 1) {
+                        // 取消超时兜底
+                        if (mSniffTimeoutRunnable != null) {
+                            mHandler.removeCallbacks(mSniffTimeoutRunnable);
+                            mSniffTimeoutRunnable = null;
+                        }
+                        stopLoadWebView(false);
+                        HashMap<String, String> finalHeaders = headers != null ? headers : new HashMap<>();
+                        String cookie = android.webkit.CookieManager.getInstance().getCookie(url);
+                        if (cookie != null && !cookie.isEmpty()) {
+                            finalHeaders.put("Cookie", " " + cookie);
+                        }
+                        mHandler.post(() -> playWebFoundUrl(url, finalHeaders));
+                    }
+                } catch (Throwable t) {
+                    LOG.i("handleSniffHit crash: " + t);
+                }
+            }
+
             private WebResourceResponse checkIsVideo(String url, HashMap<String, String> headers) {
                 if (url.endsWith("/favicon.ico")) return null;
-                boolean isFilter = com.github.tvbox.osc.util.VideoParseRuler.isFilter(webViewEntryUrl, url);
-                if (isFilter) return null;
-                boolean ad;
-                if (!loadedUrls.containsKey(url)) {
-                    ad = com.github.tvbox.osc.util.AdBlocker.isAd(url);
-                    loadedUrls.put(url, ad);
-                } else {
-                    ad = Boolean.TRUE.equals(loadedUrls.get(url));
-                }
-                if (!ad) {
-                    if (com.github.tvbox.osc.util.VideoParseRuler.checkIsVideoForParse(webViewEntryUrl, url)) {
-                        loadFoundVideoUrls.add(url);
-                        loadFoundVideoUrlsHeader.put(url, headers);
-                        LOG.i("echo-loadFoundVideoUrl:" + url);
-                        if (loadFoundCount.incrementAndGet() == 1) {
-                            stopLoadWebView(false);
-                            String foundUrl = loadFoundVideoUrls.poll();
-                            String cookie = android.webkit.CookieManager.getInstance().getCookie(foundUrl);
-                            if (cookie != null && !cookie.isEmpty()) headers.put("Cookie", " " + cookie);
-                            HashMap<String, String> finalHeaders = headers;
-                            mHandler.post(() -> playWebFoundUrl(foundUrl, finalHeaders));
+                try {
+                    boolean isFilter = com.github.tvbox.osc.util.VideoParseRuler.isFilter(webViewEntryUrl, url);
+                    if (isFilter) return null;
+                    boolean ad;
+                    if (!loadedUrls.containsKey(url)) {
+                        ad = com.github.tvbox.osc.util.AdBlocker.isAd(url);
+                        loadedUrls.put(url, ad);
+                    } else {
+                        ad = Boolean.TRUE.equals(loadedUrls.get(url));
+                    }
+                    if (!ad && mWebViewSniffMode) {
+                        // 原有严格判断
+                        boolean strict = com.github.tvbox.osc.util.VideoParseRuler.checkIsVideoForParse(webViewEntryUrl, url);
+                        // 新增宽松判断（兜底）
+                        boolean loose = looseIsVideoUrl(url);
+                        if (strict || loose) {
+                            handleSniffHit(url, headers);
                         }
                     }
+                    return null; // 永远返回 null，让 WebView 正常加载（嗅探只记不拦）
+                } catch (Throwable t) {
+                    LOG.i("checkIsVideo crash: " + t);
+                    return null;
                 }
-                return (ad || loadFoundCount.get() > 0)
-                        ? com.github.tvbox.osc.util.AdBlocker.createEmptyResource() : null;
             }
 
             @Override
@@ -1543,6 +1607,87 @@ public class LivePlayActivity extends BaseActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 try {
+                    // ===== 所有模式都注入 JS hook（嗅探核心）=====
+                    // 重写 fetch / XMLHttpRequest / video.src / MediaSource
+                    // 抓到可疑 URL 通过 sniffBridge 回传给 Java 层
+                    String hookJs =
+                        "(function(){" +
+                        "  if (window.__sniffHookInstalled) return;" +
+                        "  window.__sniffHookInstalled = true;" +
+                        "  var bridge = window.sniffBridge;" +
+                        "  function isSuspicious(u) {" +
+                        "    if (!u || u.length < 10) return false;" +
+                        "    var l = u.toLowerCase();" +
+                        "    if (l.indexOf('.css')>=0 || l.indexOf('.js')>=0 || l.indexOf('.png')>=0 || l.indexOf('.jpg')>=0 || l.indexOf('.gif')>=0 || l.indexOf('.woff')>=0 || l.indexOf('.svg')>=0) return false;" +
+                        "    if (l.indexOf('favicon')>=0 || l.indexOf('.ico')>=0) return false;" +
+                        "    if (l.indexOf('.m3u8')>=0 || l.indexOf('.mpd')>=0 || l.indexOf('.mp4')>=0 || l.indexOf('.flv')>=0 || l.indexOf('.ts')>=0 || l.indexOf('.mkv')>=0) return true;" +
+                        "    if (l.indexOf('manifest.mpd')>=0 || l.indexOf('playlist.m3u8')>=0 || l.indexOf('master.m3u8')>=0) return true;" +
+                        "    if (l.indexOf('/hls/')>=0 || l.indexOf('/dash/')>=0) return true;" +
+                        "    if ((l.indexOf('live')>=0 || l.indexOf('stream')>=0 || l.indexOf('vod')>=0) && (l.indexOf('video')>=0 || l.indexOf('media')>=0 || l.indexOf('play')>=0 || l.indexOf('channel')>=0 || l.indexOf('cdn')>=0)) return true;" +
+                        "    return false;" +
+                        "  }" +
+                        "  function report(u) { try { if (bridge && isSuspicious(u)) bridge.onUrl(u); } catch(e){} }" +
+                        // Hook fetch
+                        "  var _fetch = window.fetch;" +
+                        "  if (_fetch) {" +
+                        "    window.fetch = function() {" +
+                        "      try { if (arguments[0] && arguments[0].url) report(arguments[0].url); else if (typeof arguments[0]==='string') report(arguments[0]); } catch(e){}" +
+                        "      return _fetch.apply(this, arguments);" +
+                        "    }" +
+                        "  }" +
+                        // Hook XHR
+                        "  var _XHROpen = XMLHttpRequest.prototype.open;" +
+                        "  XMLHttpRequest.prototype.open = function(method, url) {" +
+                        "    try { report(url); } catch(e){}" +
+                        "    return _XHROpen.apply(this, arguments);" +
+                        "  }" +
+                        // Hook video.src setter
+                        "  try {" +
+                        "    var _srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');" +
+                        "    if (_srcDesc && _srcDesc.set) {" +
+                        "      Object.defineProperty(HTMLMediaElement.prototype, 'src', {" +
+                        "        set: function(u) { try { report(u); } catch(e){} return _srcDesc.set.call(this, u); }," +
+                        "        get: function() { return _srcDesc.get.call(this); }" +
+                        "      });" +
+                        "    }" +
+                        "  } catch(e){}" +
+                        // Hook createElement('video')
+                        "  var _createElement = document.createElement;" +
+                        "  document.createElement = function(tag) {" +
+                        "    var el = _createElement.apply(this, arguments);" +
+                        "    if (tag && tag.toLowerCase()==='video') {" +
+                        "      var _setAttribute = el.setAttribute.bind(el);" +
+                        "      el.setAttribute = function(name, val) { try { if (name==='src') report(val); } catch(e){} return _setAttribute(name, val); }" +
+                        "    }" +
+                        "    return el;" +
+                        "  }" +
+                        "})();";
+                    if (mLiveWebView != null) {
+                        mLiveWebView.evaluateJavascript(hookJs, null);
+                    }
+
+                    // 嗅探模式 500ms 后再注入一次（防止异步加载的页面覆盖 hook）
+                    if (mWebViewSniffMode) {
+                        mHandler.postDelayed(() -> {
+                            try {
+                                if (mLiveWebView != null && mWebViewSniffMode) {
+                                    mLiveWebView.evaluateJavascript(hookJs, null);
+                                    // 同时尝试 video 自动播放（有些站点需要触发用户手势）
+                                    String playJs =
+                                        "(function(){" +
+                                        "  var videos = document.querySelectorAll('video');" +
+                                        "  for (var i = 0; i < videos.length; i++) {" +
+                                        "    try { videos[i].muted = true; } catch(e){}" +
+                                        "    try { videos[i].play(); } catch(e){}" +
+                                        "  }" +
+                                        "})();";
+                                    mLiveWebView.evaluateJavascript(playJs, null);
+                                }
+                            } catch (Throwable ignored) {}
+                        }, 800);
+                    }
+
+                    // 浏览模式：直接自动播放
                     if (!mWebViewSniffMode) {
                         mHandler.postDelayed(() -> {
                             try {
@@ -1581,6 +1726,7 @@ public class LivePlayActivity extends BaseActivity {
      * 加载内联 mLiveWebView
      * @param url   页面 URL（已去掉 scheme 前缀）
      * @param sniff true=嗅探模式（拦截资源 → 切 VideoView），false=浏览模式（HTML5 video 直接播）
+     *              嗅探模式 15 秒超时 → 自动显示 WebViewContainer 让 HTML5 video 兜底播
      */
     private void loadWebViewUrl(String url, boolean sniff) {
         if (mLiveWebView == null) {
@@ -1592,11 +1738,44 @@ public class LivePlayActivity extends BaseActivity {
         loadFoundVideoUrlsHeader.clear();
         loadFoundCount.set(0);
         webViewEntryUrl = url;
+        // 取消之前的超时
+        if (mSniffTimeoutRunnable != null) {
+            mHandler.removeCallbacks(mSniffTimeoutRunnable);
+            mSniffTimeoutRunnable = null;
+        }
         try {
             android.webkit.CookieManager.getInstance().removeAllCookies(null);
         } catch (Exception ignored) {
         }
-        LOG.i("LiveWebView loading: " + url + " sniff=" + sniff);
+        LOG.i("🎬 LiveWebView loading: " + url + " sniff=" + sniff);
+
+        // 嗅探模式 15 秒超时兜底：如果没抓到流 → 显示 WebViewContainer，让网页里的 HTML5 video 自己播
+        if (sniff) {
+            // 先显示 WebViewContainer（NewBox 风格：不管嗅不嗅先让画面显示）
+            showWebViewPlayer();
+            mSniffTimeoutRunnable = () -> {
+                try {
+                    if (mWebViewSniffMode && loadFoundCount.get() == 0) {
+                        LOG.i("⏰ 嗅探超时 15s，兜底让 HTML5 video 自己播: " + url);
+                        // 保持 WebViewContainer 显示（showWebViewPlayer 已调用过）
+                        // 触发一次 video.play() 兜底
+                        if (mLiveWebView != null) {
+                            mLiveWebView.evaluateJavascript(
+                                "(function(){" +
+                                "  var videos = document.querySelectorAll('video');" +
+                                "  for (var i = 0; i < videos.length; i++) {" +
+                                "    try { videos[i].muted = true; } catch(e){}" +
+                                "    try { videos[i].play(); } catch(e){}" +
+                                "  }" +
+                                "})();", null);
+                        }
+                    }
+                } catch (Throwable t) {
+                    LOG.i("sniffTimeoutRunnable crash: " + t);
+                }
+            };
+            mHandler.postDelayed(mSniffTimeoutRunnable, 15000);
+        }
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(url);
     }
@@ -1619,6 +1798,53 @@ public class LivePlayActivity extends BaseActivity {
         hideWebViewPlayer();
         if (mWebViewContainer != null) {
             mWebViewContainer.removeAllViews();
+        }
+        // 清理超时
+        if (mSniffTimeoutRunnable != null) {
+            mHandler.removeCallbacks(mSniffTimeoutRunnable);
+            mSniffTimeoutRunnable = null;
+        }
+    }
+
+    /**
+     * JS → Java 嗅探桥接（WebView 里 fetch/XHR/video.src hook 通过这个回传可疑 URL）
+     * 注意：所有 @JavascriptInterface 方法跑在 WebView 线程，不能直接操作 UI
+     */
+    class SniffBridge {
+        @android.webkit.JavascriptInterface
+        public void onUrl(String url) {
+            try {
+                if (url == null || !mWebViewSniffMode) return;
+                // 回到主线程处理
+                mHandler.post(() -> {
+                    try {
+                        if (loadFoundCount.get() > 0) return;
+                        LOG.i("🖱 JS hook 回传 URL: " + url);
+                        // 复用 handleSniffHit 逻辑（但它定义在匿名内部类里，这里直接做等价操作）
+                        if (url.contains("favicon") || url.contains(".css") || url.contains(".js") || url.contains(".png") || url.contains(".jpg")) return;
+                        loadFoundVideoUrls.add(url);
+                        loadFoundVideoUrlsHeader.put(url, new HashMap<>());
+                        LOG.i("🎯 JS hook 嗅探命中: " + url);
+                        if (loadFoundCount.incrementAndGet() == 1) {
+                            if (mSniffTimeoutRunnable != null) {
+                                mHandler.removeCallbacks(mSniffTimeoutRunnable);
+                                mSniffTimeoutRunnable = null;
+                            }
+                            stopLoadWebView(false);
+                            HashMap<String, String> finalHeaders = new HashMap<>();
+                            String cookie = android.webkit.CookieManager.getInstance().getCookie(url);
+                            if (cookie != null && !cookie.isEmpty()) {
+                                finalHeaders.put("Cookie", " " + cookie);
+                            }
+                            LivePlayActivity.this.playWebFoundUrl(url, finalHeaders);
+                        }
+                    } catch (Throwable t) {
+                        LOG.i("SniffBridge.onUrl inner crash: " + t);
+                    }
+                });
+            } catch (Throwable t) {
+                LOG.i("SniffBridge.onUrl crash: " + t);
+            }
         }
     }
 
