@@ -1687,28 +1687,32 @@ public class LivePlayActivity extends BaseActivity {
                         mLiveWebView.evaluateJavascript(hookJs, null);
                     }
 
-                    // 嗅探模式 500ms 后再注入一次（防止异步加载的页面覆盖 hook）
+                    // 嗅探模式 800ms 后：再注入 hook + play + fullscreen
+                    // （cmcMediaPlayer 等播放器 fetch/blob 动态加载流，
+                    //  shouldInterceptRequest 抓不到 → 必须靠 <video>.play() + requestFullscreen 让画面出来）
                     if (mWebViewSniffMode) {
                         mHandler.postDelayed(() -> {
                             try {
                                 if (mLiveWebView != null && mWebViewSniffMode) {
                                     mLiveWebView.evaluateJavascript(hookJs, null);
-                                    // 同时尝试 video 自动播放（有些站点需要触发用户手势）
-                                    String playJs =
+                                    // play() + requestFullscreen() — 用户点两次能出，我们自动帮他点
+                                    String playFullJs =
                                         "(function(){" +
                                         "  var videos = document.querySelectorAll('video');" +
                                         "  for (var i = 0; i < videos.length; i++) {" +
                                         "    try { videos[i].muted = true; } catch(e){}" +
                                         "    try { videos[i].play(); } catch(e){}" +
+                                        "    try { videos[i].requestFullscreen(); } catch(e){}" +
+                                        "    try { videos[i].webkitRequestFullscreen(); } catch(e){}" +
                                         "  }" +
                                         "})();";
-                                    mLiveWebView.evaluateJavascript(playJs, null);
+                                    mLiveWebView.evaluateJavascript(playFullJs, null);
                                 }
                             } catch (Throwable ignored) {}
                         }, 800);
                     }
 
-                    // 浏览模式：直接自动播放
+                    // 浏览模式：直接自动 play + fullscreen
                     if (!mWebViewSniffMode) {
                         mHandler.postDelayed(() -> {
                             try {
@@ -1777,9 +1781,9 @@ public class LivePlayActivity extends BaseActivity {
             mSniffTimeoutRunnable = () -> {
                 try {
                     if (mWebViewSniffMode && loadFoundCount.get() == 0) {
-                        LOG.i("⏰ 嗅探超时 15s，兜底让 HTML5 video 自己播: " + url);
+                        LOG.i("⏰ 嗅探超时 15s，兜底让 HTML5 video 自己播+全屏: " + url);
                         // 保持 WebViewContainer 显示（showWebViewPlayer 已调用过）
-                        // 触发一次 video.play() 兜底
+                        // 触发 video.play() + requestFullscreen() 兜底（用户点两次能全屏，我们帮他自动点）
                         if (mLiveWebView != null) {
                             mLiveWebView.evaluateJavascript(
                                 "(function(){" +
@@ -1787,6 +1791,8 @@ public class LivePlayActivity extends BaseActivity {
                                 "  for (var i = 0; i < videos.length; i++) {" +
                                 "    try { videos[i].muted = true; } catch(e){}" +
                                 "    try { videos[i].play(); } catch(e){}" +
+                                "    try { videos[i].requestFullscreen(); } catch(e){}" +
+                                "    try { videos[i].webkitRequestFullscreen(); } catch(e){}" +
                                 "  }" +
                                 "})();", null);
                         }
