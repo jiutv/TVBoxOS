@@ -1739,6 +1739,48 @@ public class LivePlayActivity extends BaseActivity {
     }
 
     /**
+     * 构建强制全屏播放的 JS — 三重保险：
+     * 1. CSS 强制 video + 父容器铺满（cmcMediaPlayer 有固定宽高 style）
+     * 2. 模拟点击播放器自带的全屏按钮（用户手动点那个就能全屏）
+     * 3. 调 video.requestFullscreen()（触发 WebChromeClient.onShowCustomView）
+     * cmcMediaPlayer / HLS.js / DASH.js / ckplayer 等常见播放器都 cover
+     */
+    private String buildForceFullscreenJs() {
+        return "(function(){" +
+            // === 1. CSS 强制 video + 所有父容器铺满 ===
+            "  var videos = document.querySelectorAll('video');" +
+            "  for (var i = 0; i < videos.length; i++) {" +
+            "    var v = videos[i];" +
+            "    try { v.muted = true; v.controls = true; } catch(e){}" +
+            "    try { v.style.width='100%'; v.style.height='100%'; v.style.objectFit='contain'; v.style.position='absolute'; v.style.left='0'; v.style.top='0'; v.style.right='0'; v.style.bottom='0'; } catch(e){}" +
+            "    var p = v.parentElement; var depth = 0;" +
+            "    while (p && depth < 10) {" +
+            "      try { p.style.width='100%'; p.style.height='100%'; p.style.position='relative'; p.style.margin='0'; p.style.padding='0'; p.style.overflow='hidden'; } catch(e){}" +
+            "      p = p.parentElement; depth++;" +
+            "    }" +
+            "    try { v.play(); } catch(e){}" +
+            "    try { v.play().catch(function(){}); } catch(e){}" +
+            // === 2. requestFullscreen（浏览器级全屏）===
+            "    try { v.requestFullscreen(); } catch(e){}" +
+            "    try { v.webkitRequestFullscreen(); } catch(e){}" +
+            "    try { v.webkitEnterFullscreen(); } catch(e){}" +
+            "  }" +
+            "  try { document.documentElement.style.height='100%'; document.body.style.height='100%'; document.documentElement.style.margin='0'; document.body.style.margin='0'; document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; } catch(e){}" +
+            // === 3. 模拟点击播放器自带的全屏按钮（最关键！用户手动点的那个）===
+            "  var fsSelectors = ['[class*=fullscreen]', '[class*=Fullscreen]', '[class*=fullScreen]', '[class*=fs-btn]', '[title*=全屏]', '[aria-label*=全屏]', '[title*=fullscreen]', '.ckplayer-fullscreen', '.vjs-fullscreen-control'];" +
+            "  for (var s = 0; s < fsSelectors.length; s++) {" +
+            "    try {" +
+            "      var btns = document.querySelectorAll(fsSelectors[s]);" +
+            "      for (var b = 0; b < btns.length; b++) {" +
+            "        var rect = btns[b].getBoundingClientRect();" +
+            "        if (rect.width > 0 && rect.height > 0) { btns[b].click(); break; }" +
+            "      }" +
+            "    } catch(e){}" +
+            "  }" +
+            "})();";
+    }
+
+    /**
      * 加载内联 mLiveWebView
      * @param url   页面 URL（已去掉 scheme 前缀）
      * @param sniff true=嗅探模式（拦截资源 → 切 VideoView），false=浏览模式（HTML5 video 直接播）
@@ -1772,22 +1814,9 @@ public class LivePlayActivity extends BaseActivity {
             mSniffTimeoutRunnable = () -> {
                 try {
                     if (mWebViewSniffMode && loadFoundCount.get() == 0) {
-                        LOG.i("⏰ 嗅探超时 15s，CSS 强制铺满+play: " + url);
+                        LOG.i("⏰ 嗅探超时 15s，CSS+点击全屏兜底: " + url);
                         if (mLiveWebView != null) {
-                            mLiveWebView.evaluateJavascript(
-                                "(function(){" +
-                                "  var videos = document.querySelectorAll('video');" +
-                                "  for (var i = 0; i < videos.length; i++) {" +
-                                "    var v = videos[i];" +
-                                "    try { v.muted = true; } catch(e){}" +
-                                "    try { v.style.width='100%'; v.style.height='100%'; v.style.objectFit='contain'; v.style.position='absolute'; v.style.left='0'; v.style.top='0'; } catch(e){}" +
-                                "    var p = v.parentElement; var depth = 0;" +
-                                "    while (p && depth < 8) { try { p.style.width='100%'; p.style.height='100%'; p.style.position='relative'; } catch(e){} p = p.parentElement; depth++; }" +
-                                "    try { v.play(); } catch(e){}" +
-                                "    try { v.requestFullscreen(); } catch(e){}" +
-                                "  }" +
-                                "  try { document.documentElement.style.height='100%'; document.body.style.height='100%'; } catch(e){}" +
-                                "})();", null);
+                            mLiveWebView.evaluateJavascript(buildForceFullscreenJs(), null);
                         }
                     }
                 } catch (Throwable t) {
