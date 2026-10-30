@@ -1402,8 +1402,15 @@ public class LivePlayActivity extends BaseActivity {
     // ============ WebView 网页嗅探直播支持 ============
 
     private void showWebViewPlayer() {
+        showWebViewPlayer(true);  // 默认 release VideoView
+    }
+
+    /**
+     * @param releaseVideo true=同时 release VideoView（浏览模式）| false=保留 VideoView（嗅探模式，稍后可能切 VideoView）
+     */
+    private void showWebViewPlayer(boolean releaseVideo) {
         isWebViewPlaying = true;
-        if (mVideoView != null && mVideoView.getCurrentPlayState() != VideoView.STATE_IDLE) {
+        if (releaseVideo && mVideoView != null && mVideoView.getCurrentPlayState() != VideoView.STATE_IDLE) {
             mVideoView.release();
         }
         if (mWebViewContainer != null) {
@@ -1817,16 +1824,15 @@ public class LivePlayActivity extends BaseActivity {
         LOG.i("🎬 LiveWebView loading: " + url + " sniff=" + sniff);
 
         if (sniff) {
-            // ==== NewBox 风格：嗅探模式 WebView 隐藏在后台加载 ====
-            // 抓到流 → 切 VideoView（用户只看到原生播放器画面）
-            // 超时没抓到 → showWebViewPlayer 兜底（CSS 强制铺满 + video.play）
-            hideWebViewPlayer();  // 确保隐藏！
+            // ==== NewBox 真正的做法：先显示 WebView（立即有画面），后台默默嗅探 ====
+            // releaseVideo=false：保留 VideoView（稍后可能切 VideoView 原生播）
+            showWebViewPlayer(false);  // ← 立即显示！让 HTML5 video 先播起来！
             
             mSniffTimeoutRunnable = () -> {
                 try {
                     if (mWebViewSniffMode && loadFoundCount.get() == 0) {
-                        LOG.i("⏰ 嗅探超时 15s，兜底显示 WebView + CSS 强制铺满: " + url);
-                        showWebViewPlayer();  // 这时才显示
+                        LOG.i("⏰ 嗅探超时 15s，保持 WebView + CSS 强制铺满: " + url);
+                        // 不 hideWebViewPlayer！保持 WebView 显示
                         if (mLiveWebView != null) {
                             mLiveWebView.evaluateJavascript(buildForceFullscreenJs(), null);
                         }
@@ -1837,8 +1843,8 @@ public class LivePlayActivity extends BaseActivity {
             };
             mHandler.postDelayed(mSniffTimeoutRunnable, 15000);
         } else {
-            // 浏览模式：直接显示
-            showWebViewPlayer();
+            // 浏览模式：显示 WebView + release VideoView（不再需要原生播放器）
+            showWebViewPlayer(true);
         }
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(url);
