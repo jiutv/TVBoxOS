@@ -1628,93 +1628,102 @@ public class LivePlayActivity extends BaseActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 try {
-                    // ===== 所有模式都注入 JS hook（嗅探核心）=====
-                    // 重写 fetch / XMLHttpRequest / video.src / MediaSource
-                    // 抓到可疑 URL 通过 sniffBridge 回传给 Java 层
+                    // ===== 核心嗅探 JS Hook（升级版）=====
+                    // 1. 覆盖 fetch / XHR / video.src / MediaSource（之前的）
+                    // 2. 劫持 videoPlay / _embedPlayer / playerch 函数入口（cmcMediaPlayer 等播放器直接调）
+                    // 3. 从页面源码正则提取 m3u8/mpd/mp4 备用
                     String hookJs =
                         "(function(){" +
                         "  if (window.__sniffHookInstalled) return;" +
                         "  window.__sniffHookInstalled = true;" +
                         "  var bridge = window.sniffBridge;" +
                         "  function isSuspicious(u) {" +
-                        "    if (!u || u.length < 10) return false;" +
-                        "    var l = u.toLowerCase();" +
-                        "    if (l.indexOf('.css')>=0 || l.indexOf('.js')>=0 || l.indexOf('.png')>=0 || l.indexOf('.jpg')>=0 || l.indexOf('.gif')>=0 || l.indexOf('.woff')>=0 || l.indexOf('.svg')>=0) return false;" +
-                        "    if (l.indexOf('favicon')>=0 || l.indexOf('.ico')>=0) return false;" +
-                        "    if (l.indexOf('.m3u8')>=0 || l.indexOf('.mpd')>=0 || l.indexOf('.mp4')>=0 || l.indexOf('.flv')>=0 || l.indexOf('.ts')>=0 || l.indexOf('.mkv')>=0) return true;" +
+                        "    if (!u || u.length < 8) return false;" +
+                        "    var l = (''+u).toLowerCase();" +
+                        "    if (l.indexOf('.css')>=0 || l.indexOf('.js')>=0 || l.indexOf('.png')>=0 || l.indexOf('.jpg')>=0 || l.indexOf('.gif')>=0 || l.indexOf('.woff')>=0 || l.indexOf('.svg')>=0 || l.indexOf('.ico')>=0 || l.indexOf('.html')>=0 || l.indexOf('.htm')>=0) return false;" +
+                        "    if (l.indexOf('favicon')>=0) return false;" +
+                        "    if (l.indexOf('.m3u8')>=0 || l.indexOf('.mpd')>=0 || l.indexOf('.mp4')>=0 || l.indexOf('.flv')>=0 || l.indexOf('.ts')>=0 || l.indexOf('.mkv')>=0 || l.indexOf('.webm')>=0) return true;" +
                         "    if (l.indexOf('manifest.mpd')>=0 || l.indexOf('playlist.m3u8')>=0 || l.indexOf('master.m3u8')>=0) return true;" +
                         "    if (l.indexOf('/hls/')>=0 || l.indexOf('/dash/')>=0) return true;" +
                         "    if ((l.indexOf('live')>=0 || l.indexOf('stream')>=0 || l.indexOf('vod')>=0) && (l.indexOf('video')>=0 || l.indexOf('media')>=0 || l.indexOf('play')>=0 || l.indexOf('channel')>=0 || l.indexOf('cdn')>=0)) return true;" +
                         "    return false;" +
                         "  }" +
+                        "  function extractUrlsFromArg(arg) {" +
+                        "    if (!arg) return;" +
+                        "    try {" +
+                        "      if (typeof arg === 'string' && isSuspicious(arg)) { bridge.onUrl(arg); return; }" +
+                        "      if (typeof arg === 'object') {" +
+                        "        var keys = ['url', 'highUrl', 'standardUrl', 'fluentUrl', 'superUrl', 'host', 'src', 'playUrl', 'decodeM3u8', 'encodeM3u8', 'm3u8', 'mpd'];" +
+                        "        for (var k = 0; k < keys.length; k++) {" +
+                        "          if (arg[keys[k]]) extractUrlsFromArg(arg[keys[k]]);" +
+                        "        }" +
+                        "        if (arg.videInfo) extractUrlsFromArg(arg.videInfo);" +
+                        "        if (arg.videinfo) extractUrlsFromArg(arg.videinfo);" +
+                        "        if (arg.urls && Array.isArray(arg.urls)) { for (var i=0;i<arg.urls.length;i++) extractUrlsFromArg(arg.urls[i]); }" +
+                        "      }" +
+                        "    } catch(e){}" +
+                        "  }" +
                         "  function report(u) { try { if (bridge && isSuspicious(u)) bridge.onUrl(u); } catch(e){} }" +
                         // Hook fetch
                         "  var _fetch = window.fetch;" +
-                        "  if (_fetch) {" +
-                        "    window.fetch = function() {" +
-                        "      try { if (arguments[0] && arguments[0].url) report(arguments[0].url); else if (typeof arguments[0]==='string') report(arguments[0]); } catch(e){}" +
-                        "      return _fetch.apply(this, arguments);" +
-                        "    }" +
-                        "  }" +
+                        "  if (_fetch) { window.fetch = function() { try { if (arguments[0] && arguments[0].url) report(arguments[0].url); else if (typeof arguments[0]==='string') report(arguments[0]); } catch(e){} return _fetch.apply(this, arguments); }; }" +
                         // Hook XHR
                         "  var _XHROpen = XMLHttpRequest.prototype.open;" +
-                        "  XMLHttpRequest.prototype.open = function(method, url) {" +
-                        "    try { report(url); } catch(e){}" +
-                        "    return _XHROpen.apply(this, arguments);" +
-                        "  }" +
+                        "  XMLHttpRequest.prototype.open = function(method, url) { try { report(url); } catch(e){} return _XHROpen.apply(this, arguments); }" +
                         // Hook video.src setter
-                        "  try {" +
-                        "    var _srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');" +
-                        "    if (_srcDesc && _srcDesc.set) {" +
-                        "      Object.defineProperty(HTMLMediaElement.prototype, 'src', {" +
-                        "        set: function(u) { try { report(u); } catch(e){} return _srcDesc.set.call(this, u); }," +
-                        "        get: function() { return _srcDesc.get.call(this); }" +
-                        "      });" +
-                        "    }" +
-                        "  } catch(e){}" +
+                        "  try { var _srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src'); if (_srcDesc && _srcDesc.set) { Object.defineProperty(HTMLMediaElement.prototype, 'src', { set: function(u) { try { report(u); } catch(e){} return _srcDesc.set.call(this, u); }, get: function() { return _srcDesc.get.call(this); } }); } } catch(e){}" +
                         // Hook createElement('video')
                         "  var _createElement = document.createElement;" +
-                        "  document.createElement = function(tag) {" +
-                        "    var el = _createElement.apply(this, arguments);" +
-                        "    if (tag && tag.toLowerCase()==='video') {" +
-                        "      var _setAttribute = el.setAttribute.bind(el);" +
-                        "      el.setAttribute = function(name, val) { try { if (name==='src') report(val); } catch(e){} return _setAttribute(name, val); }" +
+                        "  document.createElement = function(tag) { var el = _createElement.apply(this, arguments); if (tag && tag.toLowerCase()==='video') { var _sA = el.setAttribute.bind(el); el.setAttribute = function(name, val) { try { if (name==='src') report(val); } catch(e){} return _sA(name, val); } } return el; }" +
+                        // Hook 常见播放器入口函数 ← 关键！gxtv.cn / yangshipin 都走这些
+                        "  var fnNames = ['videoPlay', 'video_play', 'VideoPlay', 'player', 'playerch', 'playerchOfCopyright', '_embedPlayer', '_embedPlayerIe', 'initPlayer', 'startPlayer', 'playVideo'];" +
+                        "  for (var fi = 0; fi < fnNames.length; fi++) {" +
+                        "    var fnName = fnNames[fi];" +
+                        "    if (typeof window[fnName] === 'function') {" +
+                        "      var _orig = window[fnName];" +
+                        "      window[fnName] = function() { try { for (var a = 0; a < arguments.length; a++) extractUrlsFromArg(arguments[a]); } catch(e){} return _orig.apply(this, arguments); }" +
                         "    }" +
-                        "    return el;" +
                         "  }" +
+                        // 从页面源码正则提取 m3u8/mpd URL（最后兜底）
+                        "  try {" +
+                        "    var html = document.documentElement.innerHTML || '';" +
+                        "    var re = /https?://[^\"'\\s<>]+?\\.(m3u8|mpd|mp4|flv|ts)[^\"'\\s<>]*/gi;" +
+                        "    var m; while ((m = re.exec(html)) !== null) { report(m[0]); }" +
+                        "  } catch(e){}" +
                         "})();";
                     if (mLiveWebView != null) {
                         mLiveWebView.evaluateJavascript(hookJs, null);
                     }
 
-                    // 嗅探模式：多次注入 CSS+play+点击全屏按钮（cmcMediaPlayer 等播放器 DOM 异步创建）
+                    // 嗅探模式：不再注入全屏 JS（WebView 隐藏在后台）
+                    // 等 sniffBridge 抓到流自动切 VideoView，超时 15s 才显示 WebView 兜底
+                    // 这里只注入 hook，让页面 playerch → videoPlay → fetch 调用都被劫持
                     if (mWebViewSniffMode) {
-                        // 三次链式重试：800ms → 1500ms → 3000ms
-                        int[] delays = {800, 1500, 3000};
+                        // 再注入一次 hook（有些 JS 页面刷新 hook 会被覆盖）
+                        int[] delays = {1000, 2500};
                         for (int i = 0; i < delays.length; i++) {
                             final int idx = i;
+                            final String hookJsFinal = hookJs;
                             mHandler.postDelayed(() -> {
                                 try {
                                     if (mLiveWebView != null && mWebViewSniffMode) {
-                                        LOG.i("🎬 全屏注入 #" + (idx + 1) + " sniff=" + mWebViewSniffMode);
-                                        mLiveWebView.evaluateJavascript(hookJs, null);
-                                        String fullJs = buildForceFullscreenJs();
-                                        mLiveWebView.evaluateJavascript(fullJs, null);
+                                        LOG.i("🎬 嗅探 hook 再次注入 #" + (idx + 1));
+                                        mLiveWebView.evaluateJavascript(hookJsFinal, null);
                                     }
                                 } catch (Throwable ignored) {}
                             }, delays[i]);
                         }
                     }
 
-                    // 浏览模式：同样多次注入
+                    // 浏览模式：直接显示 WebView + CSS 强制铺满
                     if (!mWebViewSniffMode) {
-                        int[] delays = {1500, 2500};
+                        int[] delays = {800, 2000};
                         for (int i = 0; i < delays.length; i++) {
                             final int idx = i;
                             mHandler.postDelayed(() -> {
                                 try {
                                     if (mLiveWebView != null && !mWebViewSniffMode) {
-                                        LOG.i("🎬 全屏注入 #" + (idx + 1) + " browse");
+                                        LOG.i("🎬 浏览全屏注入 #" + (idx + 1));
                                         mLiveWebView.evaluateJavascript(buildForceFullscreenJs(), null);
                                     }
                                 } catch (Throwable ignored) {}
@@ -1807,14 +1816,17 @@ public class LivePlayActivity extends BaseActivity {
         }
         LOG.i("🎬 LiveWebView loading: " + url + " sniff=" + sniff);
 
-        // 嗅探模式 15 秒超时兜底：如果没抓到流 → 显示 WebViewContainer，让网页里的 HTML5 video 自己播
         if (sniff) {
-            // 先显示 WebViewContainer（NewBox 风格：不管嗅不嗅先让画面显示）
-            showWebViewPlayer();
+            // ==== NewBox 风格：嗅探模式 WebView 隐藏在后台加载 ====
+            // 抓到流 → 切 VideoView（用户只看到原生播放器画面）
+            // 超时没抓到 → showWebViewPlayer 兜底（CSS 强制铺满 + video.play）
+            hideWebViewPlayer();  // 确保隐藏！
+            
             mSniffTimeoutRunnable = () -> {
                 try {
                     if (mWebViewSniffMode && loadFoundCount.get() == 0) {
-                        LOG.i("⏰ 嗅探超时 15s，CSS+点击全屏兜底: " + url);
+                        LOG.i("⏰ 嗅探超时 15s，兜底显示 WebView + CSS 强制铺满: " + url);
+                        showWebViewPlayer();  // 这时才显示
                         if (mLiveWebView != null) {
                             mLiveWebView.evaluateJavascript(buildForceFullscreenJs(), null);
                         }
@@ -1824,6 +1836,9 @@ public class LivePlayActivity extends BaseActivity {
                 }
             };
             mHandler.postDelayed(mSniffTimeoutRunnable, 15000);
+        } else {
+            // 浏览模式：直接显示
+            showWebViewPlayer();
         }
         mLiveWebView.stopLoading();
         mLiveWebView.loadUrl(url);
