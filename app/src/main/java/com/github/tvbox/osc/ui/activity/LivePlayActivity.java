@@ -1915,10 +1915,18 @@ public class LivePlayActivity extends BaseActivity {
     private void playWebFoundUrl(String url, HashMap<String, String> headers) {
         if (url == null || mVideoView == null) return;
         LOG.i("🎬 WebView 嗅探到视频流，切到 VideoView: " + url);
+        LOG.i("🎬 Sniff headers: " + (headers != null ? headers.toString() : "null"));
         stopLoadWebView(false);
         hideWebViewPlayer();
+        // ==== 修复：对齐直连分支的逻辑 ====
+        // 先 release 确保 surface 重置（嗅探期间 surface holder 可能状态异常）
+        mVideoView.release();
         HashMap<String, String> header = liveChannelHeader();
         if (headers != null) header.putAll(headers);
+        // 确保 UA 和 Referer（很多直播源需要）
+        header.put("User-Agent", "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        header.put("Referer", webViewEntryUrl != null ? webViewEntryUrl : url);
+        LOG.i("🎬 Final VideoView headers: " + header.toString());
         mVideoView.setUrl(url, header);
         mVideoView.start();
     }
