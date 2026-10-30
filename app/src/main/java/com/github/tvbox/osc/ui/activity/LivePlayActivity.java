@@ -2453,16 +2453,16 @@ public class LivePlayActivity extends BaseActivity {
             } catch (Throwable ignored) {}
 
             if ("webview".equals(dispatchTag)) {
-                // ==== webview:// 内联 WebView（先保证能播放）====
-                // 回到之前验证过能播的方案：showWebViewPlayer + loadWebViewUrl 嗅探兜底
-                LOG.i("🎬 直播线路：webview:// 内联嗅探 → " + pureUrl);
-                showWebViewPlayer();
+                // ==== webview:// NewBox 风格：后台隐藏嗅探 → 切 VideoView ====
+                // 关键：嗅探模式不调 showWebViewPlayer（它会 release VideoView！）
+                // 让 loadWebViewUrl(sniff=true) 自己管理 hideWebViewPlayer
+                // 嗅探成功 → playWebFoundUrl 切 VideoView；超时 → loadWebViewUrl 内部 showWebViewPlayer 兜底
+                LOG.i("🎬 直播线路：webview:// 后台嗅探 → " + pureUrl);
                 loadWebViewUrl(pureUrl, true);
 
             } else if ("webview-sniff".equals(dispatchTag)) {
                 // ==== webview-sniff:// 同上 ====
-                LOG.i("🎬 直播线路：webview-sniff:// 内联嗅探 → " + pureUrl);
-                showWebViewPlayer();
+                LOG.i("🎬 直播线路：webview-sniff:// 后台嗅探 → " + pureUrl);
                 loadWebViewUrl(pureUrl, true);
 
             } else if ("video".equals(dispatchTag)) {
