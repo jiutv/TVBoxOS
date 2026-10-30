@@ -2410,30 +2410,17 @@ public class LivePlayActivity extends BaseActivity {
             } catch (Throwable ignored) {}
 
             if ("webview".equals(dispatchTag)) {
-                // ==== webview://（NewBox 风格）====
-                // 跳独立全屏 WebView Activity，网页自己播 HTML5 video
-                // 不嗅探、不拦截、不劫持资源 — 让网页原生处理
-                LOG.i("🎬 直播线路：webview:// 跳 FullWebActivity browse → " + pureUrl);
-                try {
-                    Intent it = new Intent(this, FullWebActivity.class);
-                    it.putExtra(FullWebActivity.EXTRA_URL, pureUrl);
-                    startActivity(it);
-                } catch (Throwable t) {
-                    LOG.i("webview:// 启动 FullWebActivity 失败：" + t);
-                }
+                // ==== webview:// 内联 WebView（先保证能播放）====
+                // 回到之前验证过能播的方案：showWebViewPlayer + loadWebViewUrl 嗅探兜底
+                LOG.i("🎬 直播线路：webview:// 内联嗅探 → " + pureUrl);
+                showWebViewPlayer();
+                loadWebViewUrl(pureUrl, true);
 
             } else if ("webview-sniff".equals(dispatchTag)) {
-                // ==== webview-sniff://（保留协议兼容配置）====
-                // 跳 FullWebActivity sniff 模式：嗅探抓到流 → setResult 回切 VideoView
-                LOG.i("🎬 直播线路：webview-sniff:// 跳 FullWebActivity sniff → " + pureUrl);
-                try {
-                    Intent it = new Intent(this, FullWebActivity.class);
-                    it.putExtra(FullWebActivity.EXTRA_URL, pureUrl);
-                    it.putExtra(FullWebActivity.EXTRA_MODE, FullWebActivity.MODE_SNIFF);
-                    startActivityForResult(it, REQUEST_FULL_WEB_SNIFF);
-                } catch (Throwable t) {
-                    LOG.i("webview-sniff:// 启动 FullWebActivity 失败：" + t);
-                }
+                // ==== webview-sniff:// 同上 ====
+                LOG.i("🎬 直播线路：webview-sniff:// 内联嗅探 → " + pureUrl);
+                showWebViewPlayer();
+                loadWebViewUrl(pureUrl, true);
 
             } else if ("video".equals(dispatchTag)) {
                 // ==== 线路2：video:// 嗅探（保留原有机制）====
