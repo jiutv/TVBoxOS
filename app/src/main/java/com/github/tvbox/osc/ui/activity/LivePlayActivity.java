@@ -1763,15 +1763,20 @@ public class LivePlayActivity extends BaseActivity {
      */
     private String buildForceFullscreenJs() {
         return "(function(){" +
+            // === 0. 隐藏所有网页 UI chrome（央视频/gxtv 等）——关键！不隐藏就挤画面 ===
+            "  var hideSelectors = ['header', 'nav', 'footer', 'aside', 'sidebar', '[class*=Header]', '[class*=header]', '[class*=Nav]', '[class*=nav]', '[class*=Footer]', '[class*=footer]', '[class*=Sidebar]', '[class*=sidebar]', '[class*=Aside]', '[class*=aside]', '[class*=TopBar]', '[class*=topBar]', '[class*=topbar]', '[class*=NavBar]', '[class*=navBar]', '[class*=SearchBar]', '[class*=searchBar]', '[class*=searchbar]', '[class*=channel-list]', '[class*=ChannelList]', '[class*=channel_list]', '[class*=channelSidebar]', '[class*=user-info]', '[class*=UserInfo]', '[class*=Copyright]', '[class*=copyright]', '[class*=logo]', '[class*=Logo]', '[class*=advert]', '[class*=Advert]', '[class*=ads]', '[class*=Ads]', '[id*=header]', '[id*=Header]', '[id*=nav]', '[id*=Nav]', '[id*=sidebar]', '[id*=Sidebar]', '[id*=footer]', '[id*=Footer]', 'iframe[src*=ad]', 'iframe[src*=advert]', 'iframe[src*=youku]', 'iframe[src*=iqiyi]'];" +
+            "  for (var hs = 0; hs < hideSelectors.length; hs++) {" +
+            "    try { var els = document.querySelectorAll(hideSelectors[hs]); for (var e = 0; e < els.length; e++) { els[e].style.display='none'; els[e].style.visibility='hidden'; } } catch(e){}" +
+            "  }" +
             // === 1. CSS 强制 video + 所有父容器铺满 ===
             "  var videos = document.querySelectorAll('video');" +
             "  for (var i = 0; i < videos.length; i++) {" +
             "    var v = videos[i];" +
-            "    try { v.muted = true; v.controls = true; } catch(e){}" +
-            "    try { v.style.width='100%'; v.style.height='100%'; v.style.objectFit='contain'; v.style.position='absolute'; v.style.left='0'; v.style.top='0'; v.style.right='0'; v.style.bottom='0'; } catch(e){}" +
+            "    try { v.muted = false; v.controls = true; v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline',''); } catch(e){}" +
+            "    try { v.style.cssText='position:fixed !important; left:0 !important; top:0 !important; width:100vw !important; height:100vh !important; object-fit:contain !important; z-index:2147483647 !important; background:#000 !important;'; } catch(e){}" +
             "    var p = v.parentElement; var depth = 0;" +
-            "    while (p && depth < 10) {" +
-            "      try { p.style.width='100%'; p.style.height='100%'; p.style.position='relative'; p.style.margin='0'; p.style.padding='0'; p.style.overflow='hidden'; } catch(e){}" +
+            "    while (p && depth < 12) {" +
+            "      try { p.style.cssText='width:100% !important; height:100% !important; margin:0 !important; padding:0 !important; overflow:hidden !important; position:relative !important; background:#000 !important;'; } catch(e){}" +
             "      p = p.parentElement; depth++;" +
             "    }" +
             "    try { v.play(); } catch(e){}" +
@@ -1781,9 +1786,12 @@ public class LivePlayActivity extends BaseActivity {
             "    try { v.webkitRequestFullscreen(); } catch(e){}" +
             "    try { v.webkitEnterFullscreen(); } catch(e){}" +
             "  }" +
-            "  try { document.documentElement.style.height='100%'; document.body.style.height='100%'; document.documentElement.style.margin='0'; document.body.style.margin='0'; document.documentElement.style.overflow='hidden'; document.body.style.overflow='hidden'; } catch(e){}" +
-            // === 3. 模拟点击播放器自带的全屏按钮（最关键！用户手动点的那个）===
-            "  var fsSelectors = ['[class*=fullscreen]', '[class*=Fullscreen]', '[class*=fullScreen]', '[class*=fs-btn]', '[title*=全屏]', '[aria-label*=全屏]', '[title*=fullscreen]', '.ckplayer-fullscreen', '.vjs-fullscreen-control'];" +
+            // 强制 html/body 铺满
+            "  try { document.documentElement.style.cssText='width:100% !important; height:100% !important; margin:0 !important; padding:0 !important; overflow:hidden !important; background:#000 !important;'; document.body.style.cssText='width:100% !important; height:100% !important; margin:0 !important; padding:0 !important; overflow:hidden !important; background:#000 !important;'; } catch(e){}" +
+            // 隐藏 body 下所有非 video 直接子元素
+            "  try { var children = document.body.children; for (var c = 0; c < children.length; c++) { if (children[c].tagName !== 'VIDEO') { children[c].style.marginTop = '0'; } } } catch(e){}" +
+            // === 3. 模拟点击播放器自带的全屏按钮 ===
+            "  var fsSelectors = ['[class*=fullscreen]', '[class*=Fullscreen]', '[class*=fullScreen]', '[class*=fs-btn]', '[title*=全屏]', '[aria-label*=全屏]', '[title*=fullscreen]', '.ckplayer-fullscreen', '.vjs-fullscreen-control', '[class*=FullScreen]', '[class*=screen-full]', '[data-action*=fullscreen]'];" +
             "  for (var s = 0; s < fsSelectors.length; s++) {" +
             "    try {" +
             "      var btns = document.querySelectorAll(fsSelectors[s]);" +
