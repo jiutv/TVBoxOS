@@ -1687,45 +1687,70 @@ public class LivePlayActivity extends BaseActivity {
                         mLiveWebView.evaluateJavascript(hookJs, null);
                     }
 
-                    // 嗅探模式 800ms 后：再注入 hook + play + fullscreen
-                    // （cmcMediaPlayer 等播放器 fetch/blob 动态加载流，
-                    //  shouldInterceptRequest 抓不到 → 必须靠 <video>.play() + requestFullscreen 让画面出来）
+                    // 嗅探模式 800ms 后：CSS 强制铺满 + play + fullscreen
+                    // gxtv.cn cmcMediaPlayer 设了 width:940px;height:570px 固定尺寸 → 画面不铺满
+                    // 解法：JS 改 video 和父容器 CSS 为 100%，再调 play() + requestFullscreen()
                     if (mWebViewSniffMode) {
                         mHandler.postDelayed(() -> {
                             try {
                                 if (mLiveWebView != null && mWebViewSniffMode) {
                                     mLiveWebView.evaluateJavascript(hookJs, null);
-                                    // play() + requestFullscreen() — 用户点两次能出，我们自动帮他点
-                                    String playFullJs =
+                                    // CSS 强制铺满 + play + requestFullscreen
+                                    String forceFullJs =
                                         "(function(){" +
                                         "  var videos = document.querySelectorAll('video');" +
                                         "  for (var i = 0; i < videos.length; i++) {" +
-                                        "    try { videos[i].muted = true; } catch(e){}" +
-                                        "    try { videos[i].play(); } catch(e){}" +
-                                        "    try { videos[i].requestFullscreen(); } catch(e){}" +
-                                        "    try { videos[i].webkitRequestFullscreen(); } catch(e){}" +
+                                        "    var v = videos[i];" +
+                                        "    try { v.muted = true; } catch(e){}" +
+                                        "    // 强制 video 铺满" +
+                                        "    try { v.style.width='100%'; v.style.height='100%'; v.style.objectFit='contain'; v.style.position='absolute'; v.style.left='0'; v.style.top='0'; } catch(e){}" +
+                                        "    // 递归向上把父容器也撑满（去掉固定宽高）" +
+                                        "    var p = v.parentElement;" +
+                                        "    var depth = 0;" +
+                                        "    while (p && depth < 8) {" +
+                                        "      try { p.style.width='100%'; p.style.height='100%'; p.style.position='relative'; } catch(e){}" +
+                                        "      p = p.parentElement;" +
+                                        "      depth++;" +
+                                        "    }" +
+                                        "    try { v.play(); } catch(e){}" +
+                                        "    try { v.requestFullscreen(); } catch(e){}" +
+                                        "    try { v.webkitRequestFullscreen(); } catch(e){}" +
                                         "  }" +
+                                        "  // 把 body/html 也设 100%" +
+                                        "  try { document.documentElement.style.height='100%'; document.body.style.height='100%'; } catch(e){}" +
+                                        "  try { document.documentElement.style.margin='0'; document.body.style.margin='0'; } catch(e){}" +
                                         "})();";
-                                    mLiveWebView.evaluateJavascript(playFullJs, null);
+                                    mLiveWebView.evaluateJavascript(forceFullJs, null);
                                 }
                             } catch (Throwable ignored) {}
                         }, 800);
                     }
 
-                    // 浏览模式：直接自动 play + fullscreen
+                    // 浏览模式：CSS 强制铺满 + play + fullscreen
                     if (!mWebViewSniffMode) {
                         mHandler.postDelayed(() -> {
                             try {
                                 if (mLiveWebView != null && !mWebViewSniffMode) {
-                                    String autoPlayJs =
-                                            "(function(){" +
-                                            "  var videos = document.querySelectorAll('video');" +
-                                            "  for (var i = 0; i < videos.length; i++) {" +
-                                            "    try { videos[i].play(); } catch(e){}" +
-                                            "    try { videos[i].requestFullscreen(); } catch(e){}" +
-                                            "  }" +
-                                            "})();";
-                                    mLiveWebView.evaluateJavascript(autoPlayJs, null);
+                                    String forceFullJs =
+                                        "(function(){" +
+                                        "  var videos = document.querySelectorAll('video');" +
+                                        "  for (var i = 0; i < videos.length; i++) {" +
+                                        "    var v = videos[i];" +
+                                        "    try { v.muted = true; } catch(e){}" +
+                                        "    try { v.style.width='100%'; v.style.height='100%'; v.style.objectFit='contain'; v.style.position='absolute'; v.style.left='0'; v.style.top='0'; } catch(e){}" +
+                                        "    var p = v.parentElement;" +
+                                        "    var depth = 0;" +
+                                        "    while (p && depth < 8) {" +
+                                        "      try { p.style.width='100%'; p.style.height='100%'; p.style.position='relative'; } catch(e){}" +
+                                        "      p = p.parentElement;" +
+                                        "      depth++;" +
+                                        "    }" +
+                                        "    try { v.play(); } catch(e){}" +
+                                        "    try { v.requestFullscreen(); } catch(e){}" +
+                                        "  }" +
+                                        "  try { document.documentElement.style.height='100%'; document.body.style.height='100%'; } catch(e){}" +
+                                        "})();";
+                                    mLiveWebView.evaluateJavascript(forceFullJs, null);
                                 }
                             } catch (Throwable ignored) {}
                         }, 1500);
@@ -1781,19 +1806,21 @@ public class LivePlayActivity extends BaseActivity {
             mSniffTimeoutRunnable = () -> {
                 try {
                     if (mWebViewSniffMode && loadFoundCount.get() == 0) {
-                        LOG.i("⏰ 嗅探超时 15s，兜底让 HTML5 video 自己播+全屏: " + url);
-                        // 保持 WebViewContainer 显示（showWebViewPlayer 已调用过）
-                        // 触发 video.play() + requestFullscreen() 兜底（用户点两次能全屏，我们帮他自动点）
+                        LOG.i("⏰ 嗅探超时 15s，CSS 强制铺满+play: " + url);
                         if (mLiveWebView != null) {
                             mLiveWebView.evaluateJavascript(
                                 "(function(){" +
                                 "  var videos = document.querySelectorAll('video');" +
                                 "  for (var i = 0; i < videos.length; i++) {" +
-                                "    try { videos[i].muted = true; } catch(e){}" +
-                                "    try { videos[i].play(); } catch(e){}" +
-                                "    try { videos[i].requestFullscreen(); } catch(e){}" +
-                                "    try { videos[i].webkitRequestFullscreen(); } catch(e){}" +
+                                "    var v = videos[i];" +
+                                "    try { v.muted = true; } catch(e){}" +
+                                "    try { v.style.width='100%'; v.style.height='100%'; v.style.objectFit='contain'; v.style.position='absolute'; v.style.left='0'; v.style.top='0'; } catch(e){}" +
+                                "    var p = v.parentElement; var depth = 0;" +
+                                "    while (p && depth < 8) { try { p.style.width='100%'; p.style.height='100%'; p.style.position='relative'; } catch(e){} p = p.parentElement; depth++; }" +
+                                "    try { v.play(); } catch(e){}" +
+                                "    try { v.requestFullscreen(); } catch(e){}" +
                                 "  }" +
+                                "  try { document.documentElement.style.height='100%'; document.body.style.height='100%'; } catch(e){}" +
                                 "})();", null);
                         }
                     }
