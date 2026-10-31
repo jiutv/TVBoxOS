@@ -1702,13 +1702,11 @@ public class LivePlayActivity extends BaseActivity {
                         mLiveWebView.evaluateJavascript(hookJs, null);
                     }
 
-                    // 嗅探模式：不再注入全屏 JS（WebView 隐藏在后台）
-                    // 等 sniffBridge 抓到流自动切 VideoView，超时 15s 才显示 WebView 兜底
-                    // 这里只注入 hook，让页面 playerch → videoPlay → fetch 调用都被劫持
+                    // 嗅探模式：注入 hook 劫持调用 + 立即注入全屏 JS（WebView 已经显示了）
                     if (mWebViewSniffMode) {
-                        // 再注入一次 hook（有些 JS 页面刷新 hook 会被覆盖）
-                        int[] delays = {1000, 2500};
-                        for (int i = 0; i < delays.length; i++) {
+                        // 注入 hook（有些 JS 页面刷新 hook 会被覆盖）
+                        int[] hookDelays = {1000, 2500};
+                        for (int i = 0; i < hookDelays.length; i++) {
                             final int idx = i;
                             final String hookJsFinal = hookJs;
                             mHandler.postDelayed(() -> {
@@ -1718,7 +1716,20 @@ public class LivePlayActivity extends BaseActivity {
                                         mLiveWebView.evaluateJavascript(hookJsFinal, null);
                                     }
                                 } catch (Throwable ignored) {}
-                            }, delays[i]);
+                            }, hookDelays[i]);
+                        }
+                        // 注入全屏 JS（WebView 已显示，先让网页视频全屏）
+                        int[] fullscreenDelays = {0, 800, 2000};
+                        for (int i = 0; i < fullscreenDelays.length; i++) {
+                            final int idx = i;
+                            mHandler.postDelayed(() -> {
+                                try {
+                                    if (mLiveWebView != null && mWebViewSniffMode && loadFoundCount.get() == 0) {
+                                        LOG.i("🎬 嗅探全屏注入 #" + (idx + 1));
+                                        mLiveWebView.evaluateJavascript(buildForceFullscreenJs(), null);
+                                    }
+                                } catch (Throwable ignored) {}
+                            }, fullscreenDelays[i]);
                         }
                     }
 
@@ -1773,7 +1784,7 @@ public class LivePlayActivity extends BaseActivity {
             "  for (var i = 0; i < videos.length; i++) {" +
             "    var v = videos[i];" +
             "    try { v.muted = false; v.controls = true; v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline',''); } catch(e){}" +
-            "    try { v.style.cssText='position:fixed !important; left:0 !important; top:0 !important; width:100vw !important; height:100vh !important; object-fit:contain !important; z-index:2147483647 !important; background:#000 !important;'; } catch(e){}" +
+            "    try { v.style.cssText='position:fixed !important; left:0 !important; top:0 !important; width:100vw !important; height:100vh !important; object-fit:cover !important; z-index:2147483647 !important; background:#000 !important;'; } catch(e){}" +
             "    var p = v.parentElement; var depth = 0;" +
             "    while (p && depth < 12) {" +
             "      try { p.style.cssText='width:100% !important; height:100% !important; margin:0 !important; padding:0 !important; overflow:hidden !important; position:relative !important; background:#000 !important;'; } catch(e){}" +
@@ -1841,8 +1852,18 @@ public class LivePlayActivity extends BaseActivity {
                     if (mWebViewSniffMode && loadFoundCount.get() == 0) {
                         LOG.i("⏰ 嗅探超时 15s，保持 WebView + CSS 强制铺满: " + url);
                         // 不 hideWebViewPlayer！保持 WebView 显示
-                        if (mLiveWebView != null) {
-                            mLiveWebView.evaluateJavascript(buildForceFullscreenJs(), null);
+                        // 多次注入全屏 JS（同浏览模式策略，有些网页播放器初始化慢）
+                        int[] delays = {0, 800, 2000, 4000};
+                        for (int i = 0; i < delays.length; i++) {
+                            final int idx = i;
+                            mHandler.postDelayed(() -> {
+                                try {
+                                    if (mLiveWebView != null && mWebViewSniffMode && loadFoundCount.get() == 0) {
+                                        LOG.i("🎬 嗅探超时全屏注入 #" + (idx + 1));
+                                        mLiveWebView.evaluateJavascript(buildForceFullscreenJs(), null);
+                                    }
+                                } catch (Throwable ignored) {}
+                            }, delays[i]);
                         }
                     }
                 } catch (Throwable t) {
