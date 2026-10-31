@@ -354,22 +354,6 @@ public class LivePlayActivity extends BaseActivity {
 
         tvSelectedChannel = findViewById(R.id.tv_selected_channel);
 
-        // 初始隐藏频道列表和设置面板（全屏模式）
-        tvLeftChannelListLayout.setVisibility(View.INVISIBLE);
-        tvRightSettingLayout.setVisibility(View.INVISIBLE);
-        tvLeftChannelListLayout.post(() -> {
-            tvLeftChannelListLayout.getLayoutParams().width = tvLeftChannelListLayout.getWidth();
-            ViewGroup.MarginLayoutParams leftParams = (ViewGroup.MarginLayoutParams) tvLeftChannelListLayout.getLayoutParams();
-            leftParams.leftMargin = -tvLeftChannelListLayout.getWidth();
-            tvLeftChannelListLayout.setLayoutParams(leftParams);
-        });
-        tvRightSettingLayout.post(() -> {
-            tvRightSettingLayout.getLayoutParams().width = tvRightSettingLayout.getWidth();
-            ViewGroup.MarginLayoutParams rightParams = (ViewGroup.MarginLayoutParams) tvRightSettingLayout.getLayoutParams();
-            rightParams.rightMargin = -tvRightSettingLayout.getWidth();
-            tvRightSettingLayout.setLayoutParams(rightParams);
-        });
-
         if(show){
             backcontroller.setVisibility(View.VISIBLE);
             ll_epg.setVisibility(View.GONE);
